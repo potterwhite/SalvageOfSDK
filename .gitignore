@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+*.pyo
+
+# Stage outputs are generated artifacts, not source of truth
+inventory.json
+state.json
+default.xml
+*.log
