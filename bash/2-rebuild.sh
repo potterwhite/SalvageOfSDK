@@ -76,9 +76,9 @@ func_1_2_prepare_everything(){
     BASH_SCRIPT_PATH="$(realpath "${BASH_SOURCE[0]}")"
     BASH_SCRIPT_DIR="$(dirname "${BASH_SCRIPT_PATH}")"
     readonly RUN_DIR="$(pwd -P)"
-    abs_path="$(realpath "$1")"
-    echo "SDK root: ${abs_path}"
-    SDK_ROOT="${abs_path}"
+    target_abs_path="$(realpath "$1")"
+    echo "SDK root: ${target_abs_path}"
+    SDK_ROOT="${target_abs_path}"
 
     # gitlab server
     GITLAB_URL="http://192.168.3.67"         # 你的 GitLab 地址
@@ -89,6 +89,7 @@ func_1_2_prepare_everything(){
     DEFAULT_BRANCH="main"                       # 默认分支名
     GIT_USER_NAME="bilei"                    # Git 用户名
     GIT_USER_EMAIL="1811783168@qq.com"
+    GIT_COMMIT_MSG="Initial commit: Reconstruct SDK baseline"  # 初始提交信息
 
     # files
     MANIFEST_FILE="${RUN_DIR}/default.xml"
@@ -98,7 +99,7 @@ func_1_2_prepare_everything(){
 
 # ==================== 阶段 0：扫描子工程 (仅需执行一次) ====================
 func_step0_scan_subprojects(){
-    echo -e"\n"
+    echo -e "\n"
     echo ">>> [Step 0] 正在扫描所有的子节点软链接..."
     if [ ! -f "$SUBPROJECTS_FILE" ]; then
         # 只有第一次不存在时才扫描，避免覆盖
@@ -112,22 +113,22 @@ func_step0_scan_subprojects(){
 
 # ==================== 阶段 1：纯本地 git init 提交 ====================
 func_step1_local_init_all(){
-    echo -e"\n"
+    echo -e "\n"
     echo ">>> [Step 1] 开始本地初始化 git 仓库并提交..."
 
-    while IFS= read -r rel_path; do
-        [ -z "$rel_path" ] && continue
+    while IFS= read -r abs_path; do
+        [ -z "$abs_path" ] && continue
 
-        # abs_path="${SDK_ROOT}/${rel_path}"
-        echo "Processing local git: $rel_path"
+        # abs_path="${SDK_ROOT}/${abs_path}"
+        echo "Processing local git: $abs_path"
 
-        cd "$rel_path"
+        cd "$abs_path"
         rm -rf .git # 删除原来的旧/错软链接
         git init -b "${DEFAULT_BRANCH}"
         git config user.name "${GIT_USER_NAME}"
         git config user.email "${GIT_USER_EMAIL}"
         git add .
-        git commit -m "Initial commit: Reconstruct SDK baseline"
+        git commit -m "${GIT_COMMIT_MSG:-"Initial commit: Reconstruct SDK baseline"}"
 
     done < "$SUBPROJECTS_FILE"
 
@@ -137,7 +138,7 @@ func_step1_local_init_all(){
 
 # ==================== 阶段 2：生成 Manifest (default.xml) ====================
 func_step2_create_manifest(){
-    echo -e"\n"
+    echo -e "\n"
     echo ">>> [Step 2] 开始生成 $MANIFEST_FILE ..."
 
     cat <<EOF > "$MANIFEST_FILE"
@@ -148,13 +149,14 @@ func_step2_create_manifest(){
 
 EOF
 
-    while IFS= read -r rel_path; do
-        [ -z "$rel_path" ] && continue
+    while IFS= read -r abs_path; do
+        [ -z "$abs_path" ] && continue
 
-        repo_name=$(echo "$rel_path" | tr '/' '-')
+        rel="${abs_path#$SDK_ROOT/}"
+        repo_name=$(echo "$rel" | tr '/' '-')
 
         # 注意：这里必须是相对路径 rel_path！
-        echo "  <project path=\"${rel_path}\" name=\"${repo_name}.git\" />" >> "$MANIFEST_FILE"
+        echo "  <project path=\"${rel}\" name=\"${repo_name}.git\" />" >> "$MANIFEST_FILE"
     done < "$SUBPROJECTS_FILE"
 
     echo "</manifest>" >> "$MANIFEST_FILE"
@@ -163,18 +165,19 @@ EOF
 
 # ==================== 阶段 3：GitLab 建库并 Push ====================
 func_step3_push_to_remote(){
-    echo -e"\n"
+    echo -e "\n"
     echo ">>> [Step 3] 开始创建远程仓库并 Push..."
 
     AUTH_URL=$(echo "${GITLAB_URL}" | sed -E "s#(https?://)#\1oauth2:${GITLAB_TOKEN}@#")
 
-    while IFS= read -r rel_path; do
-        [ -z "$rel_path" ] && continue
+    while IFS= read -r abs_path; do
+        [ -z "$abs_path" ] && continue
 
-        repo_name=$(echo "$rel_path" | tr '/' '-')
+        rel="${abs_path#$SDK_ROOT/}"
+        repo_name=$(echo "$rel" | tr '/' '-')
 
         echo "=================================================="
-        echo "Pushing: $rel_path -> Remote: $repo_name"
+        echo "Pushing: $abs_path -> Remote: $repo_name"
         echo "=================================================="
 
         # 1. API 建库
@@ -183,7 +186,7 @@ func_step3_push_to_remote(){
             --data "name=${repo_name}&path=${repo_name}&namespace_id=$(curl --silent --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" "${GITLAB_URL}/api/v4/groups/${GITLAB_GROUP}" | grep -o '"id":[0-9]*' | head -1 | awk -F: '{print $2}')&visibility=private" > /dev/null || true
 
         # 2. Push 代码
-        cd "$rel_path"
+        cd "$abs_path"
         git remote remove origin 2>/dev/null || true
         git remote add origin "${AUTH_URL}/${GITLAB_GROUP}/${repo_name}.git"
         git push -u origin "${DEFAULT_BRANCH}" -f
