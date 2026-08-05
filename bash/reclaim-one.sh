@@ -160,13 +160,10 @@ read_options() {
         *) die "--visibility must be private, internal or public (got '$VISIBILITY')" ;;
     esac
 
-    # Validated because it feeds an arithmetic expression in gitrepo_setup_lfs;
-    # a non-numeric value would surface there as an obscure bash error instead
-    # of a legible complaint about the option the operator actually typed.
-    case "$LFS_MIN_MB" in
-        ''|*[!0-9]*) die "--lfs-min-mb must be a positive integer (got '$LFS_MIN_MB')" ;;
-        0) die "--lfs-min-mb must be greater than 0" ;;
-    esac
+    # Validated in the library, next to the gitrepo_find_big arithmetic that
+    # imposes the constraint, so this script and 2-rebuild.sh cannot drift on
+    # what counts as a valid threshold.
+    gitrepo_check_min_mb "$LFS_MIN_MB"
 }
 
 # enter_target: cd into the directory to reclaim and settle its project name.

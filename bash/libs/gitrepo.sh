@@ -15,6 +15,8 @@
 #
 # Knows about git. Does not know about GitLab.
 #
+# Depends on utils.sh for die() and require_cmd(); source that first.
+#
 # Source-only. Not executable.
 
 # The dangling .git symlink is moved here rather than deleted. Its target is
@@ -146,6 +148,51 @@ gitrepo_init() {
         || echo "$GITREPO_EVIDENCE_FILE" >> .git/info/exclude
 }
 
+# gitrepo_check_min_mb: die unless the LFS threshold is a usable size in MB.
+#
+# $1 -- the threshold as the operator supplied it
+#
+# Lives here rather than in each caller's option parser because the constraint
+# belongs to gitrepo_find_big, not to any one command line: the value feeds
+# $((min_mb - 1)) there, and a non-numeric one would surface as an obscure bash
+# arithmetic error naming a variable the operator never typed. Validating at the
+# boundary converts that into a complaint about the option itself.
+#
+# Rejects 0 as well as non-numbers. A 0MB threshold would match every file in
+# the tree and push the entire SDK through LFS, which is never what anyone
+# means by it.
+gitrepo_check_min_mb() {
+    local min_mb="$1"
+
+    case "$min_mb" in
+        ''|*[!0-9]*)
+            die "LFS threshold must be a positive integer in MB (got '$min_mb')"
+            ;;
+        0)
+            die "LFS threshold must be greater than 0"
+            ;;
+    esac
+}
+
+# gitrepo_require_lfs: die unless Git LFS is installed AND functional.
+#
+# Callers that process many directories should invoke this once up front rather
+# than relying on gitrepo_setup_lfs to discover the problem. setup_lfs only
+# checks when it has actually found a large file, so a batch caller can rebuild
+# thirty directories before dying on the thirty-first -- the worst place to
+# learn that a dependency is missing.
+#
+# Two checks, because presence is not usability. `command -v` is satisfied by a
+# git-lfs binary whose git filters were never installed or that mismatches the
+# git version; `git lfs env` is the cheapest call that actually exercises the
+# subsystem and fails in exactly those cases.
+gitrepo_require_lfs() {
+    require_cmd git git-lfs
+
+    git lfs env >/dev/null 2>&1 \
+        || die "git-lfs is installed but not functional (check: git lfs env)"
+}
+
 # gitrepo_find_big: print files at or above a size threshold, one per line.
 #
 # $1 -- threshold in MB
@@ -194,7 +241,14 @@ gitrepo_setup_lfs() {
 
     count=$(echo "$big" | wc -l)
     say "LFS: tracking $count file(s) >= ${min_mb}MB"
-    git lfs install --local -q
+
+    # No -q: `git lfs install` has no such flag (it is not git), and passing one
+    # makes it print its usage text and exit 127. Under `set -e` that aborts the
+    # run; without it, the filters are never installed and every large file is
+    # committed as an ordinary blob while the log still says "tracking". Both
+    # failures are quiet, so the output is redirected rather than suppressed by a
+    # flag that does not exist. Errors are deliberately left on stderr.
+    git lfs install --local >/dev/null
 
     while IFS= read -r file; do
         [ -n "$file" ] || continue

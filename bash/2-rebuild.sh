@@ -79,12 +79,20 @@ Optional:
   --branch=BRANCH       Default branch name.      default main
   --commit-msg=MSG      Initial commit message.
                         default "Initial commit: Reconstruct SDK baseline"
+  --lfs-min-mb=N        Files at or above this size go to Git LFS.
+                        default 50. Raise it to disable LFS in practice;
+                        there is no separate off switch.
   -h, --help            Print this text and exit. Checks nothing, touches
                         nothing.
 
   Underscores and hyphens are interchangeable, so --gitlab_url and
   --gitlab-url name the same option. Both --key=value and --key value are
   accepted; prefer --key=value when the value could start with a dash.
+
+Requirements:
+  git, git-lfs, curl, realpath and find must all be installed. All of them
+  are checked before Step 0, so a missing one costs you an error message
+  rather than a half-rebuilt tree.
 
 Stages:
   Step 0  Scan for dangling .git symlinks; write them to subprojects.txt.
@@ -123,7 +131,7 @@ EOF
 # readers below.
 func_1_2_option_names(){
     echo "gitlab-url gitlab-group gitlab-token" \
-         "git-user-name git-user-email branch commit-msg help"
+         "git-user-name git-user-email branch commit-msg lfs-min-mb help"
 }
 
 # ============================================================================
@@ -269,10 +277,67 @@ func_1_8_init_git_config(){
 }
 
 # ============================================================================
-# 1_9  Configuration report
+# 1_9  Git LFS configuration
 # ============================================================================
 
-# func_1_9_report_config: echo the settled configuration before acting on it.
+# func_1_9_init_lfs_config: read the LFS threshold.
+#
+# $@ -- the caller's raw arguments
+#
+# Thin on purpose. Reading a command line option is this script's job; deciding
+# what makes a threshold valid is git's, so the check is gitrepo_check_min_mb
+# over in libs/gitrepo.sh next to the gitrepo_find_big arithmetic it protects.
+# reclaim-one.sh had already grown its own copy of that same case statement,
+# which is the usual sign the rule belongs in the library rather than in each
+# caller's parser.
+#
+# LFS is on by default, with the same 50MB threshold reclaim-one.sh uses. There
+# is deliberately no --no-lfs switch: gitrepo_setup_lfs already reports "not
+# needed" and returns 0 when nothing crosses the threshold, so "off" is
+# reachable by raising the number. A separate boolean would make one state
+# expressible two ways and leave --no-lfs --lfs-min-mb=10 meaning nothing in
+# particular.
+func_1_9_init_lfs_config(){
+    LFS_MIN_MB=$(args_get lfs-min-mb "50" "$@")
+    gitrepo_check_min_mb "$LFS_MIN_MB"
+}
+
+# ============================================================================
+# 1_10  Dependency check
+# ============================================================================
+
+# func_1_10_check_deps: die unless every external command this run needs is
+# installed.
+#
+# Checked during initialisation rather than inside the step that first needs
+# each command. This script processes dozens of subprojects and Step 1 opens by
+# running `rm -rf .git`; discovering at subproject 37 that git-lfs was never
+# installed leaves 36 rebuilt repositories and one dead midway, which is a far
+# worse position than never having started.
+#
+# require_cmd comes from libs/utils.sh (defined there at require_cmd, sourced by
+# func_1_0_load_libs). It dies naming the first missing command. Until now
+# nothing in this repository actually called it, which is why a missing
+# dependency surfaced as a raw "command not found" mid-run.
+#
+# The LFS pair is gitrepo_require_lfs rather than a bare `require_cmd git-lfs`,
+# because a git-lfs binary on PATH whose filters were never installed passes
+# `command -v` and then fails at `git lfs track`. That distinction is git
+# knowledge, so it lives in the library.
+#
+# curl is used only by Step 3, but is demanded here too: Step 3 is the stage
+# with the most work already sunk behind it, so a missing curl is precisely the
+# failure worth catching before Step 0 rather than after Step 2.
+func_1_10_check_deps(){
+    require_cmd git curl realpath find
+    gitrepo_require_lfs
+}
+
+# ============================================================================
+# 1_11  Configuration report
+# ============================================================================
+
+# func_1_11_report_config: echo the settled configuration before acting on it.
 #
 # Printed after everything is validated and before Step 0 destroys anything, so
 # the operator gets one chance to notice a wrong group or a wrong SDK root
@@ -280,12 +345,13 @@ func_1_8_init_git_config(){
 #
 # The token is reported as present/absent, never echoed. It reaches the trace
 # via Step 3's URL anyway, but there is no reason to print it twice.
-func_1_9_report_config(){
+func_1_11_report_config(){
     say "SDK root   : ${SDK_ROOT}"
     say "GitLab     : ${GITLAB_URL}"
     say "group      : ${GITLAB_GROUP}"
     say "branch     : ${DEFAULT_BRANCH}"
     say "committer  : ${GIT_USER_NAME} <${GIT_USER_EMAIL}>"
+    say "LFS        : files >= ${LFS_MIN_MB}MB"
     say "manifest   : ${MANIFEST_FILE}"
     say "subprojects: ${SUBPROJECTS_FILE}"
 
@@ -346,6 +412,12 @@ func_step1_local_init_all(){
         git init -b "${DEFAULT_BRANCH}"
         git config user.name "${GIT_USER_NAME}"
         git config user.email "${GIT_USER_EMAIL}"
+
+        # MUST precede `git add .`, and the ordering is not cosmetic: a large
+        # file that enters history as an ordinary blob can only be moved to LFS
+        # afterwards by rewriting history. Track first, add second.
+        gitrepo_setup_lfs "${LFS_MIN_MB}"
+
         git add .
         git commit -m "${GIT_COMMIT_MSG}"
         created=$((created + 1))
@@ -439,12 +511,14 @@ func_step3_push_to_remote(){
 # Initialisation is split rather than lumped into one prepare_everything(), so
 # that the cheap checks come first and nothing important is settled late:
 #
-#   1_4 reject unknown options   <- before any state exists
-#   1_5 paths and output files   <- Steps 0-3 all depend on these
-#   1_6 SDK root                 <- validated before it is used to scan
-#   1_7 GitLab config            <- required values, checked one by one
-#   1_8 git config               <- ditto
-#   1_9 report                   <- last chance to Ctrl-C before Step 0
+#   1_4  reject unknown options   <- before any state exists
+#   1_5  paths and output files   <- Steps 0-3 all depend on these
+#   1_6  SDK root                 <- validated before it is used to scan
+#   1_7  GitLab config            <- required values, checked one by one
+#   1_8  git config               <- ditto
+#   1_9  LFS threshold            <- validated before Step 1 consumes it
+#   1_10 dependencies             <- everything git/curl/lfs, before any rm -rf
+#   1_11 report                   <- last chance to Ctrl-C before Step 0
 main() {
     func_1_0_load_libs
 
@@ -469,7 +543,9 @@ main() {
     func_1_6_init_sdk_root "$@"
     func_1_7_init_gitlab_config "$@"
     func_1_8_init_git_config "$@"
-    func_1_9_report_config
+    func_1_9_init_lfs_config "$@"
+    func_1_10_check_deps
+    func_1_11_report_config
 
     func_step0_scan_subprojects
     func_step1_local_init_all
