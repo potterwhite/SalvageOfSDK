@@ -1,5 +1,5 @@
 #!/bin/bash
-set -ex
+set -e
 
 # ============================================================================
 # 1_0  Libraries
@@ -7,11 +7,16 @@ set -ex
 
 # func_1_0_load_libs: source the shared libraries this script depends on.
 #
-# Only utils.sh (die/say/warn) and args.sh (option parsing) are taken. The
-# gitrepo/gitlab libraries are deliberately NOT sourced: they are written for
-# reclaim-one.sh's one-directory-per-invocation model, while this script drives
-# its own batch loops over subprojects.txt. Borrowing them here would couple
-# two scripts whose failure modes differ on purpose.
+# utils.sh (die/say/warn), args.sh (option parsing) and gitrepo.sh
+# (gitrepo_is_real_repo, the Step 1 re-run guard) are taken.
+#
+# gitlab.sh is deliberately NOT sourced. Its functions are written for
+# reclaim-one.sh's one-directory-per-invocation model, while Step 3 here drives
+# its own batch loop with a shared auth URL; borrowing them would couple two
+# scripts whose failure modes differ on purpose. gitrepo.sh is different: the
+# state of one ./.git is a fact about git, not about either script's control
+# flow, so exactly one definition of "is this already a repository" should
+# exist.
 #
 # First, because everything below calls die().
 #
@@ -22,9 +27,10 @@ func_1_0_load_libs(){
     local libs
     libs="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/libs"
 
-    # utils first: args.sh calls die().
+    # utils first: everything else calls die().
     . "$libs/utils.sh"
     . "$libs/args.sh"
+    . "$libs/gitrepo.sh"
 }
 
 # ============================================================================
@@ -309,24 +315,45 @@ func_step1_local_init_all(){
     echo -e "\n"
     echo ">>> [Step 1] 开始本地初始化 git 仓库并提交..."
 
+    local created=0 skipped=0
+
     while IFS= read -r abs_path; do
         [ -z "$abs_path" ] && continue
 
         # abs_path="${SDK_ROOT}/${abs_path}"
+        cd "$abs_path"
+
+        # The guard that makes re-running this script safe.
+        #
+        # Without it the loop unconditionally rm -rf'd .git and re-inited, so
+        # re-running to reach a Step 3 that was skipped the first time discarded
+        # every commit made since: new hashes, vendor baseline only, and any fix
+        # committed in between gone from history. The files survived, because
+        # `git add .` picked them back up from the working tree -- which is what
+        # made it quiet. A rebuilt tree looks identical until you ask for the log.
+        #
+        # Re-running is the normal way to resume this script, so resuming must
+        # not be destructive.
+        if gitrepo_is_real_repo; then
+            echo "SKIP: 已是 git 仓库，保留其历史: $abs_path"
+            skipped=$((skipped + 1))
+            continue
+        fi
+
         echo "Processing local git: $abs_path"
 
-        cd "$abs_path"
         rm -rf .git # 删除原来的旧/错软链接
         git init -b "${DEFAULT_BRANCH}"
         git config user.name "${GIT_USER_NAME}"
         git config user.email "${GIT_USER_EMAIL}"
         git add .
         git commit -m "${GIT_COMMIT_MSG}"
+        created=$((created + 1))
 
     done < "$SUBPROJECTS_FILE"
 
     cd "${BASH_SCRIPT_DIR}"
-    echo ">>> [Step 1] 所有子工程本地 Git 初始化完成！"
+    echo ">>> [Step 1] 完成：新建 ${created} 个，跳过 ${skipped} 个已有仓库。"
 }
 
 # ==================== 阶段 2：生成 Manifest (default.xml) ====================

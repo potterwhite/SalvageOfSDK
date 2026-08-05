@@ -92,6 +92,38 @@ gitrepo_clear_evidence() {
     say "evidence preserved: $GITREPO_EVIDENCE_FILE"
 }
 
+# gitrepo_is_real_repo: return 0 if the current directory holds a real git
+# repository of its own.
+#
+# Distinguishes the three states ./.git can be in:
+#   1. a dangling symlink into the deleted .repo/projects tree -- the untouched
+#      vendor state, and the thing reclamation replaces;
+#   2. a real directory from an earlier run -- carries history, must be left
+#      alone;
+#   3. absent -- nothing to protect.
+#
+# Only state 2 returns 0.
+#
+# `git rev-parse --git-dir` alone is NOT sufficient, because it walks UP the
+# tree. Called in a subproject whose parent is already a repository, it answers
+# happily about the parent, and a caller using it as a guard would then skip a
+# directory that has no repository of its own -- leaving that subproject
+# un-reclaimed while reporting success. The `-d .git` test pins the answer to
+# this directory before rev-parse is consulted at all.
+#
+# rev-parse is still needed after it: a bare `[ -d .git ]` would accept a
+# directory that merely happens to be named .git, or a repository left corrupt
+# by a run interrupted between `git init` and the first commit.
+#
+# The intended use is as a re-run guard by any caller whose next act is
+# destructive. `git init` itself is safe to repeat -- gitrepo_init reuses an
+# existing .git -- but `rm -rf .git` before it is not, and that is the sequence
+# this exists to gate.
+gitrepo_is_real_repo() {
+    [ -d .git ] || return 1
+    git rev-parse --git-dir >/dev/null 2>&1
+}
+
 # gitrepo_init: create the repository if absent, and ignore our own bookkeeping.
 #
 # $1 -- branch name for the initial branch
