@@ -77,18 +77,21 @@ gitlab_group_id() {
              "$url/api/v4/groups?search=$group") \
         || die "cannot reach GitLab API at $url (check the token and the network)"
 
-    GITLAB_GROUP_PATH="$group" echo "$json" | python3 -c '
-import json, os, sys
+    # The group name is passed as an argument, not as an environment variable.
+    # A "VAR=x cmd | other" prefix applies only to the left-hand command, so
+    # the variable would never reach python3 at all.
+    echo "$json" | python3 -c '
+import json, sys
 
 groups = json.load(sys.stdin)
-wanted = os.environ["GITLAB_GROUP_PATH"]
+wanted = sys.argv[1]
 
 # Prefer an exact match on either path or full_path, so a nested group given
 # as "team/sub" resolves correctly too.
 exact = [g for g in groups if wanted in (g.get("path"), g.get("full_path"))]
 chosen = exact or groups
 print(chosen[0]["id"] if chosen else "")
-'
+' "$group"
 }
 
 # gitlab_project_exists: return 0 if group/name already exists on the server.
@@ -220,7 +223,12 @@ gitlab_verify_push() {
 
     # Checked after the ls-remote, because that call itself embeds the token in
     # its argv; the invariant we care about is that nothing persists on disk.
-    if grep -q '@' .git/config; then
+    #
+    # The pattern is "://user:pass@", not a bare '@'. A bare '@' also matches a
+    # perfectly innocent `email = someone@example.com` from `git config --local
+    # user.email`, which would abort a successful push and send the operator
+    # hunting for a credential that was never there.
+    if grep -q '://[^:/@]*:[^@]*@' .git/config; then
         die "credentials still present in .git/config -- scrub failed, remove them by hand"
     fi
 
