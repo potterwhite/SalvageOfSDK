@@ -15,16 +15,16 @@
 #
 # Knows about git. Does not know about GitLab.
 #
-# Depends on utils.sh for die() and require_cmd(); source that first.
+# Depends on utils.sh for libutils_die() and libutils_require_cmd(); source that first.
 #
 # Source-only. Not executable.
 
 # The dangling .git symlink is moved here rather than deleted. Its target is
 # the only surviving trace of the vendor's original manifest, so destroying it
 # would destroy evidence we may want to re-read months from now.
-GITREPO_EVIDENCE_FILE=".git.stripped-symlink.bak"
+LIBGITREPO_EVIDENCE_FILE=".git.stripped-symlink.bak"
 
-# gitrepo_check_symlink_dir: die if the target directory is itself a symlink.
+# libgitrepo_check_symlink_dir: die if the target directory is itself a symlink.
 #
 # $1 -- the directory as the operator named it, before any cd
 #
@@ -44,36 +44,36 @@ GITREPO_EVIDENCE_FILE=".git.stripped-symlink.bak"
 # a symlinked avs -- the trailing slash asks the kernel to resolve the link.
 # Tab completion supplies that slash constantly, so without this the check
 # would silently pass exactly when it matters.
-gitrepo_check_symlink_dir() {
+libgitrepo_check_symlink_dir() {
     local target="${1%/}"
 
     [ -L "$target" ] || return 0
 
-    die "$target is a symlink -> $(readlink "$target").
+    libutils_die "$target is a symlink -> $(readlink "$target").
      Do not create a repository here. Express it in the manifest as a
      <linkfile> under the project that owns its target."
 }
 
-# gitrepo_has_evidence: return 0 if the current directory carries a .git
+# libgitrepo_has_evidence: return 0 if the current directory carries a .git
 # symlink, dangling or not.
 #
 # This is the marker that the location was once a repo project. Callers use it
 # as a precondition, because a directory with no such marker was either never
 # managed or has already been reclaimed.
-gitrepo_has_evidence() {
+libgitrepo_has_evidence() {
     [ -L .git ]
 }
 
-# gitrepo_report_evidence: print the .git symlink's target.
+# libgitrepo_report_evidence: print the .git symlink's target.
 #
 # Printed before anything is moved, so the target lands in the operator's
 # terminal log even if a later stage fails and the run is abandoned.
-gitrepo_report_evidence() {
-    gitrepo_has_evidence || return 0
-    say "evidence: .git -> $(readlink .git)"
+libgitrepo_report_evidence() {
+    libgitrepo_has_evidence || return 0
+    libutils_say "evidence: .git -> $(readlink .git)"
 }
 
-# gitrepo_clear_evidence: move the .git symlink aside so `git init` can work.
+# libgitrepo_clear_evidence: move the .git symlink aside so `git init` can work.
 #
 # Not cosmetic: `git init` follows a .git symlink. With a dangling one, git
 # would try to create the repository at the nonexistent link target instead of
@@ -81,20 +81,20 @@ gitrepo_report_evidence() {
 #
 # Skips silently when the backup already exists, so a re-run does not clobber
 # the original evidence with a second copy.
-gitrepo_clear_evidence() {
-    gitrepo_has_evidence || return 0
+libgitrepo_clear_evidence() {
+    libgitrepo_has_evidence || return 0
 
-    if [ -e "$GITREPO_EVIDENCE_FILE" ]; then
-        say "evidence already preserved in $GITREPO_EVIDENCE_FILE; removing symlink"
+    if [ -e "$LIBGITREPO_EVIDENCE_FILE" ]; then
+        libutils_say "evidence already preserved in $LIBGITREPO_EVIDENCE_FILE; removing symlink"
         rm -f .git
         return 0
     fi
 
-    mv .git "$GITREPO_EVIDENCE_FILE"
-    say "evidence preserved: $GITREPO_EVIDENCE_FILE"
+    mv .git "$LIBGITREPO_EVIDENCE_FILE"
+    libutils_say "evidence preserved: $LIBGITREPO_EVIDENCE_FILE"
 }
 
-# gitrepo_is_real_repo: return 0 if the current directory holds a real git
+# libgitrepo_is_real_repo: return 0 if the current directory holds a real git
 # repository of its own.
 #
 # Distinguishes the three states ./.git can be in:
@@ -118,15 +118,15 @@ gitrepo_clear_evidence() {
 # by a run interrupted between `git init` and the first commit.
 #
 # The intended use is as a re-run guard by any caller whose next act is
-# destructive. `git init` itself is safe to repeat -- gitrepo_init reuses an
+# destructive. `git init` itself is safe to repeat -- libgitrepo_init reuses an
 # existing .git -- but `rm -rf .git` before it is not, and that is the sequence
 # this exists to gate.
-gitrepo_is_real_repo() {
+libgitrepo_is_real_repo() {
     [ -d .git ] || return 1
     git rev-parse --git-dir >/dev/null 2>&1
 }
 
-# gitrepo_init: create the repository if absent, and ignore our own bookkeeping.
+# libgitrepo_init: create the repository if absent, and ignore our own bookkeeping.
 #
 # $1 -- branch name for the initial branch
 #
@@ -134,26 +134,26 @@ gitrepo_is_real_repo() {
 # on purpose. info/exclude is local-only and never pushed, so the vendor's tree
 # stays byte-identical to what they shipped. Editing their .gitignore would
 # create a permanent rebase conflict for one line of our own housekeeping.
-gitrepo_init() {
+libgitrepo_init() {
     local branch="$1"
 
     if [ -d .git ]; then
-        say "reusing existing .git (this is a re-run)"
+        libutils_say "reusing existing .git (this is a re-run)"
     else
-        say "git init -b $branch"
+        libutils_say "git init -b $branch"
         git init -q -b "$branch"
     fi
 
-    grep -qxF "$GITREPO_EVIDENCE_FILE" .git/info/exclude 2>/dev/null \
-        || echo "$GITREPO_EVIDENCE_FILE" >> .git/info/exclude
+    grep -qxF "$LIBGITREPO_EVIDENCE_FILE" .git/info/exclude 2>/dev/null \
+        || echo "$LIBGITREPO_EVIDENCE_FILE" >> .git/info/exclude
 }
 
-# gitrepo_check_min_mb: die unless the LFS threshold is a usable size in MB.
+# libgitrepo_check_min_mb: die unless the LFS threshold is a usable size in MB.
 #
 # $1 -- the threshold as the operator supplied it
 #
 # Lives here rather than in each caller's option parser because the constraint
-# belongs to gitrepo_find_big, not to any one command line: the value feeds
+# belongs to libgitrepo_find_big, not to any one command line: the value feeds
 # $((min_mb - 1)) there, and a non-numeric one would surface as an obscure bash
 # arithmetic error naming a variable the operator never typed. Validating at the
 # boundary converts that into a complaint about the option itself.
@@ -161,23 +161,23 @@ gitrepo_init() {
 # Rejects 0 as well as non-numbers. A 0MB threshold would match every file in
 # the tree and push the entire SDK through LFS, which is never what anyone
 # means by it.
-gitrepo_check_min_mb() {
+libgitrepo_check_min_mb() {
     local min_mb="$1"
 
     case "$min_mb" in
         ''|*[!0-9]*)
-            die "LFS threshold must be a positive integer in MB (got '$min_mb')"
+            libutils_die "LFS threshold must be a positive integer in MB (got '$min_mb')"
             ;;
         0)
-            die "LFS threshold must be greater than 0"
+            libutils_die "LFS threshold must be greater than 0"
             ;;
     esac
 }
 
-# gitrepo_require_lfs: die unless Git LFS is installed AND functional.
+# libgitrepo_require_lfs: die unless Git LFS is installed AND functional.
 #
 # Callers that process many directories should invoke this once up front rather
-# than relying on gitrepo_setup_lfs to discover the problem. setup_lfs only
+# than relying on libgitrepo_setup_lfs to discover the problem. setup_lfs only
 # checks when it has actually found a large file, so a batch caller can rebuild
 # thirty directories before dying on the thirty-first -- the worst place to
 # learn that a dependency is missing.
@@ -186,14 +186,14 @@ gitrepo_check_min_mb() {
 # git-lfs binary whose git filters were never installed or that mismatches the
 # git version; `git lfs env` is the cheapest call that actually exercises the
 # subsystem and fails in exactly those cases.
-gitrepo_require_lfs() {
-    require_cmd git git-lfs
+libgitrepo_require_lfs() {
+    libutils_require_cmd git git-lfs
 
     git lfs env >/dev/null 2>&1 \
-        || die "git-lfs is installed but not functional (check: git lfs env)"
+        || libutils_die "git-lfs is installed but not functional (check: git lfs env)"
 }
 
-# gitrepo_find_big: print files at or above a size threshold, one per line.
+# libgitrepo_find_big: print files at or above a size threshold, one per line.
 #
 # $1 -- threshold in MB
 #
@@ -203,19 +203,19 @@ gitrepo_require_lfs() {
 #
 # Prunes .git and the preserved evidence file so neither is ever considered
 # for LFS tracking.
-gitrepo_find_big() {
+libgitrepo_find_big() {
     local min_mb="$1"
 
     find . -path ./.git -prune \
-        -o -name "$GITREPO_EVIDENCE_FILE" -prune \
+        -o -name "$LIBGITREPO_EVIDENCE_FILE" -prune \
         -o -type f -size +$((min_mb - 1))M -print 2>/dev/null || true
 }
 
-# gitrepo_setup_lfs: track every file at or above the threshold with Git LFS.
+# libgitrepo_setup_lfs: track every file at or above the threshold with Git LFS.
 #
 # $1 -- threshold in MB
 #
-# Must run BEFORE gitrepo_stage. The ordering is not cosmetic: if a large file
+# Must run BEFORE libgitrepo_stage. The ordering is not cosmetic: if a large file
 # enters history as an ordinary blob, moving it to LFS afterwards requires
 # rewriting history. Track first, add second.
 #
@@ -226,21 +226,21 @@ gitrepo_find_big() {
 #
 # Returns 0 when LFS is not needed, so the caller can invoke it
 # unconditionally.
-gitrepo_setup_lfs() {
+libgitrepo_setup_lfs() {
     local min_mb="$1" big count file
 
-    big=$(gitrepo_find_big "$min_mb")
+    big=$(libgitrepo_find_big "$min_mb")
 
     if [ -z "$big" ]; then
-        say "LFS: not needed (no file >= ${min_mb}MB)"
+        libutils_say "LFS: not needed (no file >= ${min_mb}MB)"
         return 0
     fi
 
     command -v git-lfs >/dev/null \
-        || die "files >= ${min_mb}MB present but git-lfs is not installed"
+        || libutils_die "files >= ${min_mb}MB present but git-lfs is not installed"
 
     count=$(echo "$big" | wc -l)
-    say "LFS: tracking $count file(s) >= ${min_mb}MB"
+    libutils_say "LFS: tracking $count file(s) >= ${min_mb}MB"
 
     # No -q: `git lfs install` has no such flag (it is not git), and passing one
     # makes it print its usage text and exit 127. Under `set -e` that aborts the
@@ -258,12 +258,12 @@ gitrepo_setup_lfs() {
         git lfs track "${file#./}" >/dev/null
     done <<< "$big"
 
-    # Staged here rather than left to gitrepo_stage, so .gitattributes is
+    # Staged here rather than left to libgitrepo_stage, so .gitattributes is
     # guaranteed to be in the index before any tracked file is added.
     git add .gitattributes
 }
 
-# gitrepo_stage: stage the working tree, honouring the vendor's .gitignore.
+# libgitrepo_stage: stage the working tree, honouring the vendor's .gitignore.
 #
 # $1 -- space-separated paths to force-add despite .gitignore; may be empty
 #
@@ -280,22 +280,22 @@ gitrepo_setup_lfs() {
 # docs/.gitignore excludes cn/ and en/ for exactly that reason, and those hold
 # 322 PDFs. No compile failure would ever reveal their absence, so this is the
 # one place where a human decision has to be stated explicitly.
-gitrepo_stage() {
+libgitrepo_stage() {
     local force="$1" path
 
-    say "git add ."
+    libutils_say "git add ."
     git add .
 
     [ -n "$force" ] || return 0
 
     for path in $force; do
-        [ -e "$path" ] || die "--force-add path does not exist: $path"
-        say "git add -f $path   (overriding .gitignore on purpose)"
+        [ -e "$path" ] || libutils_die "--force-add path does not exist: $path"
+        libutils_say "git add -f $path   (overriding .gitignore on purpose)"
         git add -f "$path"
     done
 }
 
-# gitrepo_count_ignored: print how many files the vendor's .gitignore excludes.
+# libgitrepo_count_ignored: print how many files the vendor's .gitignore excludes.
 #
 # Reported so the operator sees the size of what is being dropped before the
 # push, not after.
@@ -309,42 +309,42 @@ gitrepo_stage() {
 # filtered out to keep the number honest: this figure is meant to answer "how
 # much of the vendor's tree am I leaving behind", and our bookkeeping file is
 # not part of the vendor's tree.
-gitrepo_count_ignored() {
+libgitrepo_count_ignored() {
     git ls-files --others --ignored --exclude-standard 2>/dev/null \
-        | grep -vxF "$GITREPO_EVIDENCE_FILE" \
+        | grep -vxF "$LIBGITREPO_EVIDENCE_FILE" \
         | wc -l
 }
 
-# gitrepo_commit: create a commit, distinguishing first import from a re-run.
+# libgitrepo_commit: create a commit, distinguishing first import from a re-run.
 #
 # $1 -- commit message for the initial import
 # $2 -- commit message for a subsequent update
 #
 # A re-run with nothing staged must not fail. Being able to retry a directory
 # after fixing one thing is the entire reason this tool works per-directory.
-gitrepo_commit() {
+libgitrepo_commit() {
     local first_msg="$1" update_msg="$2"
 
     if ! git rev-parse --verify -q HEAD >/dev/null; then
         git commit -q -m "$first_msg"
-        say "commit: $(git rev-parse --short HEAD) (initial import)"
+        libutils_say "commit: $(git rev-parse --short HEAD) (initial import)"
         return 0
     fi
 
     if git diff --cached --quiet; then
-        say "commit: nothing new to commit"
+        libutils_say "commit: nothing new to commit"
         return 0
     fi
 
     git commit -q -m "$update_msg"
-    say "commit: $(git rev-parse --short HEAD)"
+    libutils_say "commit: $(git rev-parse --short HEAD)"
 }
 
-# gitrepo_head: print the full HEAD sha.
+# libgitrepo_head: print the full HEAD sha.
 #
 # A function rather than inline `git rev-parse` at the call sites, so the
 # verification step does not have to know whether we are on a branch or
 # detached.
-gitrepo_head() {
+libgitrepo_head() {
     git rev-parse HEAD
 }

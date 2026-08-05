@@ -14,7 +14,7 @@
 # Accepted forms:
 #   --key=value    preferred; unambiguous even when the value starts with '-'
 #   --key value    accepted; the value must not itself begin with '--'
-#   --flag         boolean; args_is_true reports it as true
+#   --flag         boolean; libargs_is_true reports it as true
 #
 # Underscores and hyphens are equivalent: --gitlab_url and --gitlab-url name
 # the same option, because operators type both and making them differ would be
@@ -22,19 +22,19 @@
 #
 # Source-only. Not executable.
 
-# args_key: print the canonical form of an option name.
+# libargs_key: print the canonical form of an option name.
 #
 # $1 -- raw name, with or without leading dashes
 #
 # Strips leading dashes and folds '_' to '-' so every other function in this
 # file can compare names by plain string equality.
-args_key() {
+libargs_key() {
     local key="$1"
     key="${key#--}"
     echo "${key//_/-}"
 }
 
-# args_get: print an option's value, or a default when it was not supplied.
+# libargs_get: print an option's value, or a default when it was not supplied.
 #
 # $1  -- option name (any accepted spelling)
 # $2  -- default value; pass "" for none
@@ -42,9 +42,9 @@ args_key() {
 #
 # Later occurrences win, so a wrapper script can append an override to an
 # existing argument list without having to remove the earlier value.
-args_get() {
+libargs_get() {
     local want value arg
-    want=$(args_key "$1")
+    want=$(libargs_key "$1")
     value="$2"
     shift 2
 
@@ -54,12 +54,12 @@ args_get() {
             --*=*)
                 # Split on the FIRST '=' only, so a value may itself contain
                 # '=' -- a URL query string, for instance.
-                if [ "$(args_key "${arg%%=*}")" = "$want" ]; then
+                if [ "$(libargs_key "${arg%%=*}")" = "$want" ]; then
                     value="${arg#*=}"
                 fi
                 ;;
             --*)
-                if [ "$(args_key "$arg")" = "$want" ]; then
+                if [ "$(libargs_key "$arg")" = "$want" ]; then
                     # Consume the next token as this option's value only if it
                     # exists and does not look like another option. Otherwise
                     # this is a bare flag. Consequence: a value that genuinely
@@ -78,28 +78,28 @@ args_get() {
     echo "$value"
 }
 
-# args_has: return 0 if the option appears in the argument list at all.
+# libargs_has: return 0 if the option appears in the argument list at all.
 #
 # $1  -- option name
 # $2+ -- the caller's full argument list
 #
 # Distinguishes "operator wrote --visibility=" from "operator never mentioned
-# --visibility", a difference args_get deliberately flattens.
-args_has() {
+# --visibility", a difference libargs_get deliberately flattens.
+libargs_has() {
     local want arg
-    want=$(args_key "$1")
+    want=$(libargs_key "$1")
     shift
 
     for arg in "$@"; do
         case "$arg" in
-            --*=*) [ "$(args_key "${arg%%=*}")" = "$want" ] && return 0 ;;
-            --*)   [ "$(args_key "$arg")" = "$want" ] && return 0 ;;
+            --*=*) [ "$(libargs_key "${arg%%=*}")" = "$want" ] && return 0 ;;
+            --*)   [ "$(libargs_key "$arg")" = "$want" ] && return 0 ;;
         esac
     done
     return 1
 }
 
-# args_is_true: return 0 if the option is present and not a negative literal.
+# libargs_is_true: return 0 if the option is present and not a negative literal.
 #
 # $1  -- option name
 # $2+ -- the caller's full argument list
@@ -108,19 +108,19 @@ args_has() {
 # --dry-run=false. Accepting the negative spellings costs one case statement
 # and closes a silent-misconfiguration hole where "false" would be truthy
 # merely by being a non-empty string.
-args_is_true() {
+libargs_is_true() {
     local name="$1" value
     shift
-    args_has "$name" "$@" || return 1
+    libargs_has "$name" "$@" || return 1
 
-    value=$(args_get "$name" "" "$@")
+    value=$(libargs_get "$name" "" "$@")
     case "$value" in
         ''|0|false|False|FALSE|no|No|NO) return 1 ;;
         *) return 0 ;;
     esac
 }
 
-# args_positional: print the Nth non-option argument, counting from 0.
+# libargs_positional: print the Nth non-option argument, counting from 0.
 #
 # $1  -- index
 # $2  -- default when that index does not exist
@@ -135,12 +135,12 @@ args_is_true() {
 # a warning nobody reads.
 #
 # Pass "" when the caller has no boolean flags.
-args_positional() {
+libargs_positional() {
     local want="$1" default="$2" flags=" " seen=0 name arg
     shift 2
 
     for name in $1; do
-        flags+="$(args_key "$name") "
+        flags+="$(libargs_key "$name") "
     done
     shift
 
@@ -149,7 +149,7 @@ args_positional() {
         case "$arg" in
             --*=*) ;;
             --*)
-                name=$(args_key "$arg")
+                name=$(libargs_key "$arg")
                 case "$flags" in
                     *" $name "*)
                         # A declared boolean takes no value; leave the next
@@ -178,7 +178,7 @@ args_positional() {
     echo "$default"
 }
 
-# args_check_known: die if an option was supplied that the caller never
+# libargs_check_known: die if an option was supplied that the caller never
 # declared.
 #
 # $1  -- space-separated list of every option name the caller understands
@@ -188,24 +188,24 @@ args_positional() {
 # like --gitlab_ur=http://... is silently ignored and the run proceeds against
 # the default server, producing a wrong result that looks like a right one.
 # Rejecting unknown names converts that into an error message.
-args_check_known() {
+libargs_check_known() {
     local declared=" " known="$1" name arg key
     shift
 
     for name in $known; do
-        declared+="$(args_key "$name") "
+        declared+="$(libargs_key "$name") "
     done
 
     for arg in "$@"; do
         case "$arg" in
-            --*=*) key=$(args_key "${arg%%=*}") ;;
-            --*)   key=$(args_key "$arg") ;;
+            --*=*) key=$(libargs_key "${arg%%=*}") ;;
+            --*)   key=$(libargs_key "$arg") ;;
             *)     continue ;;
         esac
 
         case "$declared" in
             *" $key "*) ;;
-            *) die "unknown option: --$key" ;;
+            *) libutils_die "unknown option: --$key" ;;
         esac
     done
 }

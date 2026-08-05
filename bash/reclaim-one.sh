@@ -21,7 +21,7 @@
 # Design rules:
 #   1. Respect the vendor's surviving .gitignore. Do NOT second-guess it.
 #      Compilation is the judge, not this script. The sole exception is
-#      --force-add; gitrepo_stage() documents why it has to exist.
+#      --force-add; libgitrepo_stage() documents why it has to exist.
 #   2. Idempotent. Safe to re-run at any point. Never destroys SDK content:
 #      the dangling .git symlink is moved aside, never deleted.
 #   3. The PAT is written to no file except .git/config, for the duration of
@@ -75,7 +75,7 @@ script_dir() {
 
 # load_libs: source every library this script depends on.
 #
-# Ordered by dependency: utils first, because every other library calls die().
+# Ordered by dependency: utils first, because every other library calls libutils_die().
 load_libs() {
     local libs
     libs="$(script_dir)/libs"
@@ -92,7 +92,7 @@ load_libs() {
 
 # option_names: print every option this script accepts, space separated.
 #
-# Single source of truth, handed to args_check_known so a misspelled option is
+# Single source of truth, handed to libargs_check_known so a misspelled option is
 # an error instead of a silent fall back to a default. Must be edited together
 # with read_options below.
 option_names() {
@@ -102,7 +102,7 @@ option_names() {
 
 # flag_names: print the subset of options that take no value.
 #
-# args_positional needs this to tell `--dry-run docs` (flag, then a directory)
+# libargs_positional needs this to tell `--dry-run docs` (flag, then a directory)
 # apart from `--branch main` (option, then its value). Without it the directory
 # is swallowed as --dry-run's value and the script quietly works on '.' instead
 # -- a wrong result that looks like a right one.
@@ -127,18 +127,18 @@ show_help() {
 # is exactly one place to look when a run misbehaves. The defaults live here
 # too, rather than scattered across the functions that consume them.
 read_options() {
-    args_check_known "$(option_names)" "$@"
+    libargs_check_known "$(option_names)" "$@"
 
-    TOKEN=$(args_get gitlab-token "" "$@")
-    GITLAB_URL=$(args_get gitlab-url "http://192.168.3.67" "$@")
-    GITLAB_GROUP=$(args_get gitlab-group "team_rk3576" "$@")
-    BRANCH=$(args_get branch "main" "$@")
-    VISIBILITY=$(args_get visibility "private" "$@")
-    LFS_MIN_MB=$(args_get lfs-min-mb "50" "$@")
-    FORCE_ADD=$(args_get force-add "" "$@")
+    TOKEN=$(libargs_get gitlab-token "" "$@")
+    GITLAB_URL=$(libargs_get gitlab-url "http://192.168.3.67" "$@")
+    GITLAB_GROUP=$(libargs_get gitlab-group "team_rk3576" "$@")
+    BRANCH=$(libargs_get branch "main" "$@")
+    VISIBILITY=$(libargs_get visibility "private" "$@")
+    LFS_MIN_MB=$(libargs_get lfs-min-mb "50" "$@")
+    FORCE_ADD=$(libargs_get force-add "" "$@")
 
-    if args_is_true dry-run "$@"; then DRY_RUN=yes; else DRY_RUN=no; fi
-    if args_is_true allow-no-evidence "$@"; then
+    if libargs_is_true dry-run "$@"; then DRY_RUN=yes; else DRY_RUN=no; fi
+    if libargs_is_true allow-no-evidence "$@"; then
         ALLOW_NO_EVIDENCE=yes
     else
         ALLOW_NO_EVIDENCE=no
@@ -147,23 +147,23 @@ read_options() {
     # The target directory is the only positional argument. Defaulting it to
     # '.' makes "cd there and run it" the shortest path, which is how this is
     # actually used.
-    TARGET=$(args_positional 0 "." "$(flag_names)" "$@")
+    TARGET=$(libargs_positional 0 "." "$(flag_names)" "$@")
 
     # A dry run needs no credential, and demanding one would discourage the
     # rehearsal that catches mistakes before they reach the server.
     if [ -z "$TOKEN" ] && [ "$DRY_RUN" = no ]; then
-        die "missing required option: --gitlab-token (or pass --dry-run)"
+        libutils_die "missing required option: --gitlab-token (or pass --dry-run)"
     fi
 
     case "$VISIBILITY" in
         private|internal|public) ;;
-        *) die "--visibility must be private, internal or public (got '$VISIBILITY')" ;;
+        *) libutils_die "--visibility must be private, internal or public (got '$VISIBILITY')" ;;
     esac
 
-    # Validated in the library, next to the gitrepo_find_big arithmetic that
+    # Validated in the library, next to the libgitrepo_find_big arithmetic that
     # imposes the constraint, so this script and 2-rebuild.sh cannot drift on
     # what counts as a valid threshold.
-    gitrepo_check_min_mb "$LFS_MIN_MB"
+    libgitrepo_check_min_mb "$LFS_MIN_MB"
 }
 
 # enter_target: cd into the directory to reclaim and settle its project name.
@@ -180,13 +180,13 @@ read_options() {
 enter_target() {
     # Checked BEFORE the cd, while we still have the name the operator typed.
     # After cd, a symlinked directory is indistinguishable from its target.
-    gitrepo_check_symlink_dir "$TARGET"
+    libgitrepo_check_symlink_dir "$TARGET"
 
     cd "$TARGET" 2>/dev/null \
-        || die "not a directory: $TARGET (resolved from $PWD)"
+        || libutils_die "not a directory: $TARGET (resolved from $PWD)"
 
-    PROJECT_NAME=$(args_get project-name "$(basename "$(pwd -P)")" "$@")
-    [ -n "$PROJECT_NAME" ] || die "cannot derive a project name from $(pwd -P)"
+    PROJECT_NAME=$(libargs_get project-name "$(basename "$(pwd -P)")" "$@")
+    [ -n "$PROJECT_NAME" ] || libutils_die "cannot derive a project name from $(pwd -P)"
 }
 
 # check_evidence: require proof that this directory was once a repo project.
@@ -200,21 +200,21 @@ enter_target() {
 # --allow-no-evidence exists because 21 of the 55 known project roots have no
 # surviving marker. Absence is a reason to look, not a reason to refuse.
 check_evidence() {
-    if gitrepo_has_evidence; then
-        gitrepo_report_evidence
+    if libgitrepo_has_evidence; then
+        libgitrepo_report_evidence
         return 0
     fi
 
     if [ -d .git ]; then
-        say "no .git symlink, but a real .git is here -- treating as a re-run"
+        libutils_say "no .git symlink, but a real .git is here -- treating as a re-run"
         return 0
     fi
 
     [ "$ALLOW_NO_EVIDENCE" = yes ] \
-        || die "no .git here, so nothing proves $(pwd -P) was a repo project.
+        || libutils_die "no .git here, so nothing proves $(pwd -P) was a repo project.
      If you are sure, re-run with --allow-no-evidence."
 
-    warn "proceeding without evidence (--allow-no-evidence)"
+    libutils_warn "proceeding without evidence (--allow-no-evidence)"
 }
 
 # ---------------------------------------------------------------------------
@@ -256,11 +256,11 @@ import_message() {
 # warranted) needs the names.
 report_result() {
     echo
-    say "done: $(pwd -P)"
-    say "  project : $GITLAB_GROUP/$PROJECT_NAME"
-    say "  commit  : $(gitrepo_head)"
-    say "  ignored : $(gitrepo_count_ignored) file(s) excluded by .gitignore"
-    say "            list them: git ls-files --others --ignored --exclude-standard"
+    libutils_say "done: $(pwd -P)"
+    libutils_say "  project : $GITLAB_GROUP/$PROJECT_NAME"
+    libutils_say "  commit  : $(libgitrepo_head)"
+    libutils_say "  ignored : $(libgitrepo_count_ignored) file(s) excluded by .gitignore"
+    libutils_say "            list them: git ls-files --others --ignored --exclude-standard"
 
     echo
     echo "manifest line (fill in path= relative to the SDK root):"
@@ -291,7 +291,7 @@ main() {
 
     # Handled before read_options so --help works with no token and no valid
     # target directory.
-    if args_is_true help "$@"; then
+    if libargs_is_true help "$@"; then
         show_help
         return 0
     fi
@@ -299,27 +299,27 @@ main() {
     read_options "$@"
     enter_target "$@"
 
-    say "directory : $(pwd -P)"
-    say "project   : $GITLAB_GROUP/$PROJECT_NAME"
+    libutils_say "directory : $(pwd -P)"
+    libutils_say "project   : $GITLAB_GROUP/$PROJECT_NAME"
 
     check_evidence
-    gitrepo_clear_evidence
-    gitrepo_init "$BRANCH"
-    gitrepo_setup_lfs "$LFS_MIN_MB"
-    gitrepo_stage "$FORCE_ADD"
-    gitrepo_commit "$(import_message)" "Update $PROJECT_NAME from SDK tree"
+    libgitrepo_clear_evidence
+    libgitrepo_init "$BRANCH"
+    libgitrepo_setup_lfs "$LFS_MIN_MB"
+    libgitrepo_stage "$FORCE_ADD"
+    libgitrepo_commit "$(import_message)" "Update $PROJECT_NAME from SDK tree"
 
     if [ "$DRY_RUN" = yes ]; then
         echo
-        say "dry run: stopping before touching $GITLAB_URL"
+        libutils_say "dry run: stopping before touching $GITLAB_URL"
         report_result
         return 0
     fi
 
-    gitlab_ensure_project "$GITLAB_URL" "$GITLAB_GROUP" "$PROJECT_NAME" \
+    libgitlab_ensure_project "$GITLAB_URL" "$GITLAB_GROUP" "$PROJECT_NAME" \
         "$TOKEN" "$VISIBILITY"
-    gitlab_push "$GITLAB_URL" "$GITLAB_GROUP" "$PROJECT_NAME" "$TOKEN" "$BRANCH"
-    gitlab_verify_push "$GITLAB_URL" "$GITLAB_GROUP" "$PROJECT_NAME" "$TOKEN" "$BRANCH" "$(gitrepo_head)"
+    libgitlab_push "$GITLAB_URL" "$GITLAB_GROUP" "$PROJECT_NAME" "$TOKEN" "$BRANCH"
+    libgitlab_verify_push "$GITLAB_URL" "$GITLAB_GROUP" "$PROJECT_NAME" "$TOKEN" "$BRANCH" "$(libgitrepo_head)"
 
     report_result
 }
