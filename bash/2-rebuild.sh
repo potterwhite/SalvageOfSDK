@@ -73,6 +73,9 @@ func_1_2_prepare_everything(){
 
     # ==================== 配置区 ====================
     # misc
+    BASH_SCRIPT_PATH="$(realpath "${BASH_SOURCE[0]}")"
+    BASH_SCRIPT_DIR="$(dirname "${BASH_SCRIPT_PATH}")"
+    readonly RUN_DIR="$(pwd -P)"
     abs_path="$(realpath "$1")"
     echo "SDK root: ${abs_path}"
     SDK_ROOT="${abs_path}"
@@ -88,19 +91,19 @@ func_1_2_prepare_everything(){
     GIT_USER_EMAIL="1811783168@qq.com"
 
     # files
-    MANIFEST_FILE="default.xml"
-    SUBPROJECTS_FILE="subprojects.txt"
+    MANIFEST_FILE="${RUN_DIR}/default.xml"
+    SUBPROJECTS_FILE="${RUN_DIR}/subprojects.txt"
     # ================================================
 }
 
 # ==================== 阶段 0：扫描子工程 (仅需执行一次) ====================
 func_step0_scan_subprojects(){
+    echo -e"\n"
     echo ">>> [Step 0] 正在扫描所有的子节点软链接..."
     if [ ! -f "$SUBPROJECTS_FILE" ]; then
         # 只有第一次不存在时才扫描，避免覆盖
-        cd "$SDK_ROOT"
         # find . -name .git -type l | sed 's|/\.git||' | sed 's|^\./||' > "$SUBPROJECTS_FILE"
-        find . -name .git -type l -exec bash -c 'realpath "$(dirname "{}")"' \;  > "$SUBPROJECTS_FILE"
+        find "${SDK_ROOT}" -name .git -type l -exec bash -c 'realpath "$(dirname "{}")"' \;  > "$SUBPROJECTS_FILE"
         echo "已生成 $SUBPROJECTS_FILE，共找到 $(wc -l < $SUBPROJECTS_FILE) 个子工程。"
     else
         echo "$SUBPROJECTS_FILE 已存在，跳过扫描，直接复用。"
@@ -109,6 +112,7 @@ func_step0_scan_subprojects(){
 
 # ==================== 阶段 1：纯本地 git init 提交 ====================
 func_step1_local_init_all(){
+    echo -e"\n"
     echo ">>> [Step 1] 开始本地初始化 git 仓库并提交..."
 
     while IFS= read -r rel_path; do
@@ -127,11 +131,13 @@ func_step1_local_init_all(){
 
     done < "$SUBPROJECTS_FILE"
 
+    cd "${BASH_SCRIPT_DIR}"
     echo ">>> [Step 1] 所有子工程本地 Git 初始化完成！"
 }
 
 # ==================== 阶段 2：生成 Manifest (default.xml) ====================
 func_step2_create_manifest(){
+    echo -e"\n"
     echo ">>> [Step 2] 开始生成 $MANIFEST_FILE ..."
 
     cat <<EOF > "$MANIFEST_FILE"
@@ -157,6 +163,7 @@ EOF
 
 # ==================== 阶段 3：GitLab 建库并 Push ====================
 func_step3_push_to_remote(){
+    echo -e"\n"
     echo ">>> [Step 3] 开始创建远程仓库并 Push..."
 
     AUTH_URL=$(echo "${GITLAB_URL}" | sed -E "s#(https?://)#\1oauth2:${GITLAB_TOKEN}@#")
@@ -186,6 +193,7 @@ func_step3_push_to_remote(){
 
     done < "$SUBPROJECTS_FILE"
 
+    cd "${BASH_SCRIPT_DIR}"
     echo ">>> [Step 3] 全部子工程已成功 Push 到 GitLab！"
 }
 
