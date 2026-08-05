@@ -321,8 +321,8 @@ main() {
 
     gitlab_ensure_project "$GITLAB_URL" "$GITLAB_GROUP" "$PROJECT_NAME" \
         "$TOKEN" "$VISIBILITY"
-    #gitlab_push "$GITLAB_URL" "$GITLAB_GROUP" "$PROJECT_NAME" "$TOKEN" "$BRANCH"
-    #gitlab_verify_push "$GITLAB_URL" "$GITLAB_GROUP" "$PROJECT_NAME" "$TOKEN" "$BRANCH" "$(gitrepo_head)"
+    gitlab_push "$GITLAB_URL" "$GITLAB_GROUP" "$PROJECT_NAME" "$TOKEN" "$BRANCH"
+    gitlab_verify_push "$GITLAB_URL" "$GITLAB_GROUP" "$PROJECT_NAME" "$TOKEN" "$BRANCH" "$(gitrepo_head)"
 
     report_result
 }
