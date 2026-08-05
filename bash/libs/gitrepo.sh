@@ -196,11 +196,23 @@ libgitrepo_check_min_mb() {
 # git-lfs binary whose git filters were never installed or that mismatches the
 # git version; `git lfs env` is the cheapest call that actually exercises the
 # subsystem and fails in exactly those cases.
+#
+# Run from a throwaway directory because `git lfs env` is not read-only: outside
+# a repository it treats $PWD as the repository root and creates lfs/objects and
+# lfs/tmp there. Called as an up-front dependency check, that $PWD is wherever
+# the operator launched the script -- so the check would litter their directory
+# with an empty lfs/ tree.
 libgitrepo_require_lfs() {
+    local probe
+
     libutils_require_cmd git git-lfs
 
-    git lfs env >/dev/null 2>&1 \
-        || libutils_die "git-lfs is installed but not functional (check: git lfs env)"
+    probe=$(mktemp -d) || libutils_die "cannot create temp dir for the LFS check"
+
+    ( cd "$probe" && git lfs env >/dev/null 2>&1 ) \
+        || { rm -rf "$probe"; libutils_die "git-lfs is installed but not functional (check: git lfs env)"; }
+
+    rm -rf "$probe"
 }
 
 # libgitrepo_find_big: print files at or above a size threshold, one per line.
