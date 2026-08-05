@@ -94,28 +94,37 @@ libgitrepo_clear_evidence() {
     libutils_say "evidence preserved: $LIBGITREPO_EVIDENCE_FILE"
 }
 
-# libgitrepo_is_real_repo: return 0 if the current directory holds a real git
-# repository of its own.
+# libgitrepo_is_real_repo: return 0 if the current directory holds a git
+# repository of its own WITH at least one commit.
 #
-# Distinguishes the three states ./.git can be in:
+# Distinguishes the four states ./.git can be in:
 #   1. a dangling symlink into the deleted .repo/projects tree -- the untouched
 #      vendor state, and the thing reclamation replaces;
-#   2. a real directory from an earlier run -- carries history, must be left
-#      alone;
-#   3. absent -- nothing to protect.
+#   2. a real directory carrying history -- must be left alone;
+#   3. a repository with no commits, left by a run interrupted between
+#      `git init` and the first commit -- has nothing to protect, must be
+#      rebuilt;
+#   4. absent -- nothing to protect.
 #
 # Only state 2 returns 0.
 #
-# `git rev-parse --git-dir` alone is NOT sufficient, because it walks UP the
-# tree. Called in a subproject whose parent is already a repository, it answers
-# happily about the parent, and a caller using it as a guard would then skip a
-# directory that has no repository of its own -- leaving that subproject
-# un-reclaimed while reporting success. The `-d .git` test pins the answer to
-# this directory before rev-parse is consulted at all.
+# Each of the three tests rules out one state, and none is redundant:
 #
-# rev-parse is still needed after it: a bare `[ -d .git ]` would accept a
-# directory that merely happens to be named .git, or a repository left corrupt
-# by a run interrupted between `git init` and the first commit.
+# `-d .git` must come first. `git rev-parse` walks UP the tree, so in a
+# subproject whose parent is already a repository it answers happily about the
+# parent -- a guard built on it alone would skip a directory that has no
+# repository of its own, leaving that subproject un-reclaimed while reporting
+# success. `-d` pins the answer to this directory. It also rules out state 1,
+# since a dangling symlink is not a directory.
+#
+# `rev-parse --git-dir` rejects a directory that merely happens to be named
+# .git.
+#
+# `rev-parse HEAD` is what separates state 3 from state 2, and it is the whole
+# point of the guard: --git-dir succeeds on a freshly-initialised repository
+# with no commits, so without this the caller would treat a half-built
+# directory as carrying history and skip it -- committing nothing, then
+# recording it in the manifest as done.
 #
 # The intended use is as a re-run guard by any caller whose next act is
 # destructive. `git init` itself is safe to repeat -- libgitrepo_init reuses an
@@ -123,7 +132,8 @@ libgitrepo_clear_evidence() {
 # this exists to gate.
 libgitrepo_is_real_repo() {
     [ -d .git ] || return 1
-    git rev-parse --git-dir >/dev/null 2>&1
+    git rev-parse --git-dir >/dev/null 2>&1 || return 1
+    git rev-parse HEAD >/dev/null 2>&1
 }
 
 # libgitrepo_init: create the repository if absent, and ignore our own bookkeeping.
@@ -260,7 +270,14 @@ libgitrepo_setup_lfs() {
 
     # Staged here rather than left to libgitrepo_stage, so .gitattributes is
     # guaranteed to be in the index before any tracked file is added.
-    git add .gitattributes
+    #
+    # -f because .gitattributes is OURS, not the vendor's, and some vendor
+    # .gitignore files exclude it -- device/rockchip's starts with `.*` and `/*`,
+    # which matches it. Without -f, `git add` exits 1 there and `set -e` kills
+    # the whole run; and were the failure ignored instead, LFS would be silently
+    # inert -- every large file committed as an ordinary blob while the log above
+    # still says "tracking".
+    git add -f .gitattributes
 }
 
 # libgitrepo_stage: stage the working tree, honouring the vendor's .gitignore.
