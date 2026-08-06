@@ -29,7 +29,7 @@ libgitlab_host() {
     echo "${url%%/*}"
 }
 
-# libgitlab_repo_url: print the plain, credential-free clone URL.
+# libgitlab_repo_url: print the plain, credential-free HTTP clone URL.
 #
 # $1 -- base URL
 # $2 -- group path
@@ -37,8 +37,43 @@ libgitlab_host() {
 #
 # This is the form that is safe to print, log and paste. Use libgitlab_auth_url
 # only where a credential is genuinely required.
+#
+# Prefer libgitlab_ssh_url for anything a human will run: plain HTTP has no
+# credential attached, so a clone from it just fails with "Access denied".
 libgitlab_repo_url() {
     echo "$1/$2/$3.git"
+}
+
+# libgitlab_ssh_base: print the SSH base URL for a group, with trailing slash.
+#
+# $1 -- base URL (only its hostname is used)
+# $2 -- group path
+#
+# This is what a repo manifest's fetch= attribute needs: repo concatenates it
+# with each project name, so it must end in a slash and must be a real URL --
+# the scp-like git@host:path form does not survive concatenation.
+#
+# The port from libgitlab_host is dropped: it belongs to the web listener, while
+# SSH answers on 22. Keeping it would silently point every clone at the wrong
+# port on any GitLab not served from :80.
+libgitlab_ssh_base() {
+    local host
+    host=$(libgitlab_host "$1")
+    echo "ssh://git@${host%%:*}/$2/"
+}
+
+# libgitlab_ssh_url: print the SSH clone URL for one project.
+#
+# $1 -- base URL (only its hostname is used)
+# $2 -- group path
+# $3 -- project name
+#
+# This is the form to hand to people. SSH keys are already per-user and
+# non-expiring, whereas HTTP would need every colleague to store a PAT in
+# plaintext; and `repo sync` runs many fetches in parallel with interactive
+# prompting disabled, so a password it cannot ask for is fatal.
+libgitlab_ssh_url() {
+    echo "$(libgitlab_ssh_base "$1" "$2")$3.git"
 }
 
 # libgitlab_auth_url: print the push URL with the PAT spliced in.

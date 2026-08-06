@@ -54,22 +54,25 @@ libmanifest_xml_escape() {
 # libmanifest_begin: start a manifest by writing its header.
 #
 # $1 -- path to the .part file to create
-# $2 -- remote fetch base URL
-# $3 -- remote review base URL
-# $4 -- default revision (branch name)
+# $2 -- remote fetch base URL, with a trailing slash
+# $3 -- default revision (branch name)
 #
 # Truncates the part file. A re-run therefore rebuilds the list from scratch and
 # no entry can appear twice; appending to an existing manifest would need a
 # dedup pass, and a dedup pass is a second place for the naming rule to live.
+#
+# No review= attribute is written: it names a Gerrit server, is read only by
+# `repo upload`, and we host on GitLab. Emitting one pointed at the GitLab URL
+# advertised a review system that does not exist.
 libmanifest_begin() {
-    local part="$1" fetch="$2" review="$3" branch="$4"
+    local part="$1" fetch="$2" branch="$3"
 
     [ -n "$part" ] || libutils_die "libmanifest_begin: no part file given"
 
     cat > "$part" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <manifest>
-  <remote name="origin" fetch="$(libmanifest_xml_escape "$fetch")" review="$(libmanifest_xml_escape "$review")" />
+  <remote name="origin" fetch="$(libmanifest_xml_escape "$fetch")" />
   <default revision="$(libmanifest_xml_escape "$branch")" remote="origin" sync-j="4" />
 
 EOF
