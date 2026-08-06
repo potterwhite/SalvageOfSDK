@@ -32,7 +32,7 @@ func_1_0_load_libs(){
 # nothing in the body may carry a bare '$' or it silently expands to empty.
 func_1_1_show_help(){
     cat <<EOF
-Usage: ${0##*/} <baseline-dir> <candidate-dir> [options]
+Usage: ${0##*/} --baseline-dir=DIR --candidate-dir=DIR [options]
        ${0##*/} -h | --help
 
 Compare two directory trees and report every way they differ. Written to check
@@ -48,13 +48,18 @@ READ-ONLY. Neither tree is modified. Nothing is created except the report and
 its working files.
 
 Arguments:
-  <baseline-dir>   The tree that is presumed correct -- the vendor's original.
-  <candidate-dir>  The tree being checked -- the one 'repo sync' produced.
+  --baseline-dir=DIR   The tree that is presumed correct -- the vendor's original.
+  --candidate-dir=DIR  The tree being checked -- the one 'repo sync' produced.
+
+  Both are named options rather than bare positional arguments, so that a
+  directory whose own name is 'baseline-dir' can never be mistaken for the
+  option that selects it, and so that the two cannot be given in the wrong
+  order by accident.
 
   The order decides how findings are worded, not which checks run. An entry
   present only in the baseline is something the rebuild lost; one present only
   in the candidate is something it invented. Those are different problems, so
-  swapping the arguments produces a differently worded report.
+  swapping the two produces a differently worded report.
 
 Options:
   --output=FILE      Where to write the report.
@@ -75,7 +80,7 @@ Options:
   Underscores and hyphens are interchangeable. Both --key=value and --key value
   are accepted.
 
-What is compared, in order. Every section ends in PASS or FAIL:
+What is compared, in order. Every section ends in PASS, FAIL or SKIP:
   1. Top level          Immediate children of each root. A whole missing
                         subtree shows up here as one line instead of as tens of
                         thousands of missing-file lines in section 2.
@@ -107,8 +112,11 @@ What is excluded, everywhere:
   present in one tree only IS a difference and is reported as one.
 
 Exit status:
-  0  every section passed
-  1  a section failed, or the run could not proceed
+  0  PASS        every section ran and found no difference
+  1  FAIL        a section found a difference, or the run could not proceed
+  1  INCOMPLETE  no difference found, but a section was skipped, so the trees
+                 were not verified to match. Non-zero on purpose: this result
+                 must not gate anything that a PASS would be allowed to gate.
 EOF
 }
 
@@ -126,16 +134,9 @@ EOF
 # worse: --skip-contentt would be ignored too, but on a report the operator
 # then reads as a full verification when it was not one.
 func_1_2_check_options(){
-    OPTION_NAMES="output work-dir skip-content help"
+    OPTION_NAMES="baseline-dir candidate-dir output work-dir skip-content help"
 
     libargs_check_known "$OPTION_NAMES" "$@"
-
-    # Declared for libargs_positional, which cannot find the positional
-    # arguments correctly without knowing which options take no value. Given
-    # '--skip-content /tmp/a /tmp/b', a parser that thinks --skip-content takes
-    # a value swallows /tmp/a as that value, silently shifts both paths, and
-    # compares the wrong trees while reporting success.
-    BOOLEAN_FLAGS="skip-content help"
 }
 
 # ============================================================================
@@ -153,11 +154,21 @@ func_1_2_check_options(){
 func_1_3_init_trees(){
     local baseline candidate
 
-    baseline=$(libargs_positional 0 "" "$BOOLEAN_FLAGS" "$@")
-    candidate=$(libargs_positional 1 "" "$BOOLEAN_FLAGS" "$@")
+    # libargs_has before libargs_get, so "never mentioned" and "mentioned with
+    # an empty value" get different messages. They are different mistakes: the
+    # first is a forgotten option, the second an unset shell variable that
+    # expanded to nothing, and an operator hunting the second one needs to be
+    # told the option was seen.
+    libargs_has baseline-dir "$@" || \
+        libutils_die "no --baseline-dir given (try --help)"
+    libargs_has candidate-dir "$@" || \
+        libutils_die "no --candidate-dir given (try --help)"
 
-    [ -n "$baseline" ] || libutils_die "no baseline directory given (try --help)"
-    [ -n "$candidate" ] || libutils_die "no candidate directory given (try --help)"
+    baseline=$(libargs_get baseline-dir "" "$@")
+    candidate=$(libargs_get candidate-dir "" "$@")
+
+    [ -n "$baseline" ] || libutils_die "--baseline-dir is empty"
+    [ -n "$candidate" ] || libutils_die "--candidate-dir is empty"
 
     libfstree_require_dir "$baseline" baseline
     libfstree_require_dir "$candidate" candidate
@@ -485,7 +496,7 @@ func_3_6_section_content(){
         libreport_line "$BODY" "Sections 1 to 5 read directory metadata only: they can show that every"
         libreport_line "$BODY" "file is present, named alike and permitted alike, and say nothing"
         libreport_line "$BODY" "whatever about what is inside them."
-        libreport_verdict "$BODY" FAIL "not checked -- content comparison was skipped"
+        libreport_verdict "$BODY" SKIP "not checked -- content comparison was skipped"
         N_CONTENT=-1
         return 0
     fi
@@ -539,15 +550,46 @@ func_3_6_section_content(){
 # subshell and lost. Deciding the verdict here, in the caller's own shell, is
 # what makes OVERALL available to the exit status -- computing it inside the
 # summary left it empty and the script exited 0 on a failing comparison.
+#
+# Three states, not two. A count of -1 means the section did not run, and
+# folding that into either PASS or FAIL loses the distinction that matters
+# most: PASS would claim the files were checked and found identical when they
+# were never read, and FAIL would report a difference nothing found. INCOMPLETE
+# says what happened. It exits non-zero like FAIL, because a run that skipped a
+# section has not verified the trees match and must not gate anything.
 func_4_0_decide_overall(){
-    OVERALL=PASS
+    local failed=no skipped=no
 
-    [ "$N_TOP" -eq 0 ]     || OVERALL=FAIL
-    [ "$N_ENTRIES" -eq 0 ] || OVERALL=FAIL
-    [ "$N_EMPTY" -eq 0 ]   || OVERALL=FAIL
-    [ "$N_LINKS" -eq 0 ]   || OVERALL=FAIL
-    [ "$N_MODES" -eq 0 ]   || OVERALL=FAIL
-    [ "$N_CONTENT" -eq 0 ] || OVERALL=FAIL
+    func_4_0_tally_section "$N_TOP"
+    func_4_0_tally_section "$N_ENTRIES"
+    func_4_0_tally_section "$N_EMPTY"
+    func_4_0_tally_section "$N_LINKS"
+    func_4_0_tally_section "$N_MODES"
+    func_4_0_tally_section "$N_CONTENT"
+
+    if [ "$failed" = yes ]; then
+        OVERALL=FAIL
+    elif [ "$skipped" = yes ]; then
+        OVERALL=INCOMPLETE
+    else
+        OVERALL=PASS
+    fi
+}
+
+# func_4_0_tally_section: fold one section's count into failed/skipped.
+#
+# $1 -- the count, or -1 for a section that did not run
+#
+# Assigns to its caller's locals rather than taking them as arguments, which is
+# why it is not a pure function: the alternative is repeating the same case
+# statement six times, and a sixth copy that drifts from the other five is a
+# verdict that silently disagrees with the summary beside it.
+func_4_0_tally_section(){
+    case "$1" in
+        -1) skipped=yes ;;
+        0)  ;;
+        *)  failed=yes ;;
+    esac
 }
 
 # func_4_0_summary: build the summary block that goes at the top.
@@ -614,6 +656,11 @@ func_4_4_report_result(){
     libutils_say "report written: ${REPORT}"
     libutils_say "overall: ${OVERALL}"
     echo
+    if [ "$OVERALL" = INCOMPLETE ]; then
+        echo "A section was skipped, so this run did not verify the two trees match."
+        echo "It found no difference in what it did compare. Re-run without"
+        echo "--skip-content for an answer that can be relied on."
+    fi
     if [ "$OVERALL" = FAIL ]; then
         echo "Read the SUMMARY at the top of the report, then the sections it marks FAIL."
         echo "Every count in the summary is backed by a file in ${WORK_DIR},"

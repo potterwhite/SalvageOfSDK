@@ -72,23 +72,29 @@ libreport_line() {
     echo "$*" >> "$body"
 }
 
-# libreport_verdict: append a section's PASS or FAIL line.
+# libreport_verdict: append a section's PASS, FAIL or SKIP line.
 #
 # $1 -- body file
-# $2 -- PASS or FAIL
+# $2 -- PASS, FAIL or SKIP
 # $3 -- explanation
 #
 # Every section ends in one of these, so a reader scanning for "FAIL" finds
 # every problem and can trust that the absence of the word means the checks
 # actually ran and passed -- rather than that a section was skipped.
+#
+# SKIP exists so that last sentence stays true. A section that did not run is
+# neither a pass nor a failure, and spelling it as either one lies: PASS claims
+# a check that never happened, FAIL reports a problem nothing found. The word is
+# rejected unless it is one of the three, because a typo'd verdict is a section
+# whose result a reader's grep will never see.
 libreport_verdict() {
     local body="$1" verdict="$2" text="$3"
 
     [ -f "$body" ] || libutils_die "libreport_verdict: $body does not exist (begin not called?)"
 
     case "$verdict" in
-        PASS|FAIL) ;;
-        *) libutils_die "libreport_verdict: verdict must be PASS or FAIL, got '$verdict'" ;;
+        PASS|FAIL|SKIP) ;;
+        *) libutils_die "libreport_verdict: verdict must be PASS, FAIL or SKIP, got '$verdict'" ;;
     esac
 
     echo "[$verdict] $text" >> "$body"
