@@ -213,10 +213,9 @@ libgitlab_scrub_token() {
 # Removed and re-added rather than set-url, so a re-run cannot inherit a stale
 # URL from an earlier attempt against a different server.
 #
-# Call this AFTER libgitlab_push, never before. That function replaces origin
-# with a token-bearing HTTP URL and then sed-scrubs the token back out, leaving
-# a credential-free HTTP URL behind -- which would silently overwrite an SSH
-# remote set earlier and hand the operator a remote that asks for a password.
+# Idempotent, and called by libgitlab_push's own exit path as well as by
+# callers. A caller that only needs the default `origin` need not call it at all
+# after a push; one that wants a differently-named remote still does.
 libgitlab_setup_remote() {
     local url="$1" group="$2" name="$3" remote="${4:-origin}"
     git remote remove "$remote" 2>/dev/null || true
@@ -236,12 +235,22 @@ libgitlab_setup_remote() {
 # .git/config -- precisely the defect in the older migration scripts this
 # tooling replaces.
 #
+# The trap also restores the SSH remote, because scrubbing alone leaves origin
+# at a bare HTTP URL: credential-free, but unusable -- it prompts for a password
+# nobody has. A caller running under `set -e` dies on a failed push before it
+# can set the remote itself, so that half-state is exactly what an operator
+# finds after a failure. Repairing it here means every exit path, successful or
+# not, ends with a remote that works.
+#
 # The remote is removed and re-added rather than updated, so a re-run cannot
 # inherit a stale URL from a previous attempt against a different server.
 libgitlab_push() {
     local url="$1" group="$2" name="$3" token="$4" branch="$5"
 
-    trap libgitlab_scrub_token EXIT
+    # Expanded now, not at trap time: a trap body runs after the function's
+    # locals are gone.
+    trap "libgitlab_scrub_token
+          libgitlab_setup_remote '$url' '$group' '$name'" EXIT
 
     git remote remove origin 2>/dev/null || true
     git remote add origin "$(libgitlab_auth_url "$url" "$group" "$name" "$token")"
@@ -249,7 +258,10 @@ libgitlab_push() {
     libutils_say "pushing $branch to $(libgitlab_repo_url "$url" "$group" "$name")"
     git push -q -u origin "$branch"
 
+    # Done here as well as in the trap, so the state a caller's verify step
+    # inspects is the final one rather than whatever the trap will make of it.
     libgitlab_scrub_token
+    libgitlab_setup_remote "$url" "$group" "$name"
     trap - EXIT
 }
 
