@@ -39,7 +39,7 @@
 #
 # Options:
 #   --gitlab-token=TOKEN   required unless --dry-run; scopes: api, write_repository
-#   --gitlab-url=URL       default http://192.168.3.67
+#   --gitlab-url=URL       default http://gitlab.example.com
 #   --gitlab-group=GROUP   default team_rk3576
 #   --project-name=NAME    default: the directory's basename
 #   --branch=BRANCH        default main
@@ -130,7 +130,7 @@ read_options() {
     libargs_check_known "$(option_names)" "$@"
 
     TOKEN=$(libargs_get gitlab-token "" "$@")
-    GITLAB_URL=$(libargs_get gitlab-url "http://192.168.3.67" "$@")
+    GITLAB_URL=$(libargs_get gitlab-url "http://gitlab.example.com" "$@")
     GITLAB_GROUP=$(libargs_get gitlab-group "team_rk3576" "$@")
     BRANCH=$(libargs_get branch "main" "$@")
     VISIBILITY=$(libargs_get visibility "private" "$@")

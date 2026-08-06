@@ -18,7 +18,7 @@
 
 # libgitlab_host: print the host portion of a GitLab base URL.
 #
-# $1 -- base URL, e.g. http://192.168.3.67
+# $1 -- base URL, e.g. http://gitlab.example.com
 #
 # Needed because embedding a credential requires splicing it between the
 # scheme and the host: http://oauth2:TOKEN@host/group/name.git

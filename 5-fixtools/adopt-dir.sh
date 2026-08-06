@@ -92,7 +92,7 @@ Required:
                          the SDK tree.
 
 Required unless --dry-run:
-  --gitlab-url=URL       e.g. --gitlab-url=http://192.168.3.67
+  --gitlab-url=URL       e.g. --gitlab-url=http://gitlab.example.com
   --gitlab-group=GROUP   The group to create the project in, e.g. RK3576
   --git-user-name=NAME   Value for git config user.name
   --git-user-email=EMAIL Value for git config user.email
@@ -290,7 +290,7 @@ func_1_5_init_gitlab_config(){
 
     GITLAB_URL=$(libargs_get gitlab-url "" "$@")
     [ -n "$GITLAB_URL" ] || \
-        libutils_die "missing required option: --gitlab-url (e.g. --gitlab-url=http://192.168.3.67)"
+        libutils_die "missing required option: --gitlab-url (e.g. --gitlab-url=http://gitlab.example.com)"
 
     GITLAB_GROUP=$(libargs_get gitlab-group "" "$@")
     [ -n "$GITLAB_GROUP" ] || \
