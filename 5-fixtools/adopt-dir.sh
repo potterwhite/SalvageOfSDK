@@ -54,6 +54,11 @@ Usage: ${0##*/} --dir=DIR --dry-run
 Take one directory that repo never managed, make it a git repository, push it to
 GitLab, and print the manifest line that puts it back in the right place.
 
+The remote is set whether or not you pass --push, at the credential-free SSH URL
+built from --gitlab-url and --gitlab-group. So a run without --push leaves a
+repository you can push yourself with a plain 'git push -u origin main', without
+retyping the server details you already gave.
+
 START WITH --dry-run. It builds nothing and needs no GitLab options: it prints
 what the directory holds, by file type and by size, so you can decide what is
 build output or scratch and write a .gitignore BEFORE anything is committed.
@@ -102,14 +107,16 @@ Options:
                          "overlay" at the top level.
   --push                 Create the GitLab project and push. Without it nothing
                          leaves this machine: the repository is built and
-                         committed locally and the manifest line is printed, so
-                         you can rehearse the whole thing first.
+                         committed locally, the remote is still set, and the
+                         manifest line is printed -- so you can rehearse the
+                         whole thing and then push by hand when it looks right.
   --gitlab-token=PAT     Required by --push. Needs api scope. Never written to
                          disk: it is spliced into the push URL, and scrubbed
                          from .git/config by a trap that fires on Ctrl-C too.
   --branch=NAME          Branch to create and push. default main
                          Must match the manifest's default revision, or
                          'repo sync' finds no such branch.
+  --remote=NAME          Name for the remote. default origin
   --lfs-min-mb=N         Track files at or above this size with Git LFS.
                          default 50
                          Relevant here: these directories are where the rootfs
@@ -158,7 +165,7 @@ EOF
 # afterwards without rewriting history that has already been pushed.
 func_1_2_check_options(){
     OPTION_NAMES="dir sdk-root gitlab-url gitlab-group gitlab-token \
-git-user-name git-user-email branch lfs-min-mb commit-msg visibility push \
+git-user-name git-user-email branch remote lfs-min-mb commit-msg visibility push \
 dry-run help"
 
     libargs_check_known "$OPTION_NAMES" "$@"
@@ -304,6 +311,9 @@ func_1_6_init_git_config(){
     BRANCH=$(libargs_get branch "main" "$@")
     [ -n "$BRANCH" ] || libutils_die "--branch was given an empty value"
 
+    REMOTE=$(libargs_get remote "origin" "$@")
+    [ -n "$REMOTE" ] || libutils_die "--remote was given an empty value"
+
     # Not needed to survey a directory: nothing is committed, so there is no
     # commit to attribute to anyone.
     if [ "$DRY_RUN" = yes ]; then
@@ -399,11 +409,12 @@ func_1_10_report_config(){
     fi
 
     libutils_say "branch:      ${BRANCH}"
+    libutils_say "remote:      ${REMOTE} -> $(libgitlab_ssh_url "$GITLAB_URL" "$GITLAB_GROUP" "$REPO_NAME")"
     libutils_say "LFS:         files >= ${LFS_MIN_MB}MB"
     if [ "$DO_PUSH" = yes ]; then
         libutils_say "push:        YES -> $(libgitlab_repo_url "$GITLAB_URL" "$GITLAB_GROUP" "$REPO_NAME")"
     else
-        libutils_say "push:        no (local only; re-run with --push when the line looks right)"
+        libutils_say "push:        no (built locally, remote set; push by hand or re-run with --push)"
     fi
     echo >&2
 }
@@ -543,31 +554,46 @@ func_2_0_build(){
 }
 
 # ============================================================================
-# 3_0  Push
+# 3_0  Remote and push
 # ============================================================================
 
-# func_3_0_push: create the project and push, then ask the server what it has.
+# func_3_0_push: set the remote, and push it if asked.
+#
+# The remote is set either way. Without --push nothing leaves the machine, but
+# the server details were already given on the command line, so withholding the
+# remote would mean the operator has to retype what they already told us before
+# they can `git push` by hand. A remote is a note about where this belongs, not
+# an act of publishing.
+#
+# Set AFTER the push, not before: libgitlab_push replaces origin with a
+# token-bearing URL and scrubs the token afterwards, which would leave a
+# credential-free HTTP remote in place of our SSH one.
 #
 # The verify step is not ceremony. `git push` exiting 0 is weaker evidence than
 # it looks -- a stale remote or a server-side hook can leave the branch
 # elsewhere -- and the manifest line printed afterwards is a promise that this
 # repository is fetchable at this branch.
 func_3_0_push(){
-    if [ "$DO_PUSH" != yes ]; then
-        libutils_say "not pushing (no --push)"
-        return 0
-    fi
-
     cd "$DIR"
 
-    libgitlab_ensure_project "$GITLAB_URL" "$GITLAB_GROUP" "$REPO_NAME" \
-        "$GITLAB_TOKEN" "$VISIBILITY"
+    if [ "$DO_PUSH" = yes ]; then
+        libgitlab_ensure_project "$GITLAB_URL" "$GITLAB_GROUP" "$REPO_NAME" \
+            "$GITLAB_TOKEN" "$VISIBILITY"
 
-    libgitlab_push "$GITLAB_URL" "$GITLAB_GROUP" "$REPO_NAME" \
-        "$GITLAB_TOKEN" "$BRANCH"
+        libgitlab_push "$GITLAB_URL" "$GITLAB_GROUP" "$REPO_NAME" \
+            "$GITLAB_TOKEN" "$BRANCH"
 
-    libgitlab_verify_push "$GITLAB_URL" "$GITLAB_GROUP" "$REPO_NAME" \
-        "$GITLAB_TOKEN" "$BRANCH" "$HEAD_SHA"
+        libgitlab_verify_push "$GITLAB_URL" "$GITLAB_GROUP" "$REPO_NAME" \
+            "$GITLAB_TOKEN" "$BRANCH" "$HEAD_SHA"
+    fi
+
+    libgitlab_setup_remote "$GITLAB_URL" "$GITLAB_GROUP" "$REPO_NAME" "$REMOTE"
+    libutils_say "remote ${REMOTE}: $(git remote get-url "$REMOTE")"
+
+    if [ "$DO_PUSH" != yes ]; then
+        libutils_say "not pushed (no --push). To push it yourself:"
+        libutils_say "  cd $DIR && git push -u ${REMOTE} ${BRANCH}"
+    fi
 }
 
 # ============================================================================

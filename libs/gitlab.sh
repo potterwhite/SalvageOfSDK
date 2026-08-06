@@ -198,6 +198,31 @@ libgitlab_scrub_token() {
     sed -i 's|://[^:/@]*:[^@]*@|://|' .git/config
 }
 
+# libgitlab_setup_remote: point a remote at the credential-free SSH URL.
+#
+# $1 -- base URL
+# $2 -- group path
+# $3 -- project name
+# $4 -- remote name. default origin, for an empty value too
+#
+# The SSH form, so the remote a person inherits is one they can actually use:
+# `git push <remote> main` goes through their own key, with nothing to type and
+# nothing stored. This is the same base the manifest fetches from, so a
+# directory adopted here and a directory synced by repo end up agreeing.
+#
+# Removed and re-added rather than set-url, so a re-run cannot inherit a stale
+# URL from an earlier attempt against a different server.
+#
+# Call this AFTER libgitlab_push, never before. That function replaces origin
+# with a token-bearing HTTP URL and then sed-scrubs the token back out, leaving
+# a credential-free HTTP URL behind -- which would silently overwrite an SSH
+# remote set earlier and hand the operator a remote that asks for a password.
+libgitlab_setup_remote() {
+    local url="$1" group="$2" name="$3" remote="${4:-origin}"
+    git remote remove "$remote" 2>/dev/null || true
+    git remote add "$remote" "$(libgitlab_ssh_url "$url" "$group" "$name")"
+}
+
 # libgitlab_push: push a branch of the current repository to GitLab.
 #
 # $1 -- base URL
