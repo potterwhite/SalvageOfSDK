@@ -226,7 +226,9 @@ Options:
                          disk: it is spliced into the push URL, and scrubbed
                          from .git/config by a trap that fires on Ctrl-C too.
   --project-name=NAME    Name for the GitLab project, which is also what the
-                         manifest lines reference. default repo-hooks
+                         manifest lines reference. Give it without .git; both
+                         the manifest lines and the push URL append that
+                         themselves. default repo-hooks
   --branch=NAME          Branch to create and push. default main
                          Must match the manifest's default revision, or
                          'repo sync' finds no such branch.
@@ -710,25 +712,35 @@ func_4_0_bundle(){
 # 4_1  What to do next
 # ============================================================================
 
-# func_4_1_bundle_next_steps: print the manifest lines, then the manual half.
+# func_4_1_bundle_next_steps: print the manual half, with the manifest lines
+# in the middle of the step that uses them.
 #
-# The lines go to stdout and everything else to stderr, so they can be captured:
+# The lines go to stdout and everything else to stderr, so they can still be
+# captured on their own:
 #     carry-extras.sh --repo-hook-dir=... 2>/dev/null
+#
+# That split is why this is three writes rather than one heredoc: a heredoc is
+# a single stream, so nothing else can print into the middle of it.
 func_4_1_bundle_next_steps(){
-    libutils_say ""
-    libutils_say "MANIFEST LINES (stdout; everything else is stderr):"
-    libextras_manifest_lines "$PROJECT_NAME"
-
     cat >&2 <<EOF
 
 ============================================================================
 NEXT STEPS -- none of this happened automatically
 ============================================================================
 
-STEP 1. Paste those two lines into default.xml, before </manifest>.
+STEP 1. Paste these two lines into default.xml, before </manifest>:
+EOF
+
+    echo "" >&2
+    libextras_manifest_lines "$PROJECT_NAME"
+    echo "" >&2
+
+    cat >&2 <<EOF
+  (Those two lines are this script's only stdout. Everything else is stderr,
+  so '2>/dev/null' gives you just them.)
 
   The first is an ordinary project: it tells repo to check the hook repository
-  out at .repo-hooks/. The second says that project holds hooks, and that
+  out at .hooks/. The second says that project holds hooks, and that
   post-sync is enabled. Both are self-closing and take no children.
 
 STEP 2. Commit and push the manifest, or run 3-publish-manifest.sh.
@@ -743,13 +755,19 @@ STEP 3. Tell colleagues to sync with --verify:
   (yes/always/NO) prompt asking them to approve the hook, and answering NO
   skips it silently -- the sync still reports success.
 
-STEP 4. Check it worked, in a workspace synced with the new manifest:
+STEP 4 (optional, and for you -- not for colleagues). Sync a scratch
+workspace yourself once, after STEP 2, and check two paths:
 
-    ls -d <workspace>/.repo-hooks           # the hook repository arrived
-    ls -d <workspace>/app/ipcweb-backend/thirdparty/googletest
+    ls -d <scratch>/.hooks
+    ls -d <scratch>/app/ipcweb-backend/thirdparty/googletest
 
-  The second is one of the empty directories only the hook creates. If it is
-  there, the hook ran.
+  The first shows the hook repository arrived. The second is one of the empty
+  directories only the hook creates, so it shows the hook actually ran.
+
+  Worth doing once because repo hides both ways this can go wrong: a failing
+  hook only prints 'Warning: post-sync hook reported failure', and a colleague
+  who forgets --verify has the hook skipped silently. Either way the sync still
+  says it succeeded. Those two paths are the only honest signal.
 EOF
 
     if [ "$DO_PUSH" != yes ]; then
