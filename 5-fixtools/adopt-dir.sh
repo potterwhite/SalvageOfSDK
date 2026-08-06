@@ -622,6 +622,14 @@ func_4_0_manifest_line(){
 # to be got wrong or forgotten -- and forgetting them means a pushed repository
 # no manifest mentions, which is invisible until someone syncs a fresh tree and
 # comes up short.
+#
+# The line to paste is repeated here in full rather than described. Every step
+# is something to run or paste; asking the operator to reconstruct the line from
+# a path= and a name= printed separately is asking them to retype what we
+# already have. There is deliberately no "check path= and name= are correct"
+# step: both are computed here from --dir and --sdk-root, so re-reading them
+# only confirms this script agrees with itself. What is worth checking is what
+# git ended up with, which is why the remote is shown as a command to run.
 func_4_1_next_steps(){
     local line manifest_repo
     line=$(func_4_0_manifest_line)
@@ -633,15 +641,9 @@ func_4_1_next_steps(){
 NEXT STEPS -- none of this happened automatically
 ============================================================================
 
-STEP 1. Check the line above says what you expect.
+STEP 1. Put this line in the manifest, immediately before </manifest>:
 
-    path="${REL}"        <- where it lands in a synced tree
-    name="${REPO_NAME}.git"  <- the project that was just pushed
-
-  If path= is wrong, nothing is broken yet: re-run with --sdk-root=... and
-  ignore this output. The pushed repository is reusable, only the line changes.
-
-STEP 2. Put it in the manifest, immediately before </manifest>:
+${line}
 
     cd ${manifest_repo}
     \$EDITOR default.xml
@@ -653,7 +655,7 @@ STEP 2. Put it in the manifest, immediately before </manifest>:
   the file from the .git symlinks it can find, and this directory has none --
   your line would be silently dropped.
 
-STEP 3. Commit and push the manifest:
+STEP 2. Commit and push the manifest:
 
     git diff                      # expect exactly one added line
     git add default.xml
@@ -664,17 +666,18 @@ STEP 3. Commit and push the manifest:
   refuses to commit anything but default.xml and .gitignore, which matters
   because build logs in that directory contain the token in plaintext.
 
-STEP 4. Update a workspace that was already synced.
+STEP 3. Update a workspace that was already synced.
 
   An existing 'repo sync' tree does not learn about a new project on its own;
   it re-reads the manifest first. From the root of that workspace:
 
     cd <workspace>
-    repo init -u <same manifest URL> -b ${BRANCH}   # re-reads the manifest
-    repo sync ${REL}                                # fetches just this one
+    repo init -u <same manifest URL> -b ${BRANCH}
+    repo sync ${REL}
 
-  'repo sync' with no argument works too and is slower. Naming the path is
-  also the safer habit: it cannot touch the other 55 projects.
+  The 'repo init' is what re-reads the manifest; the 'repo sync' then fetches
+  just this one project. 'repo sync' with no argument works too and is slower.
+  Naming the path is also the safer habit: it cannot touch the other projects.
 
   Verify it arrived, and that LFS content came with it:
 
@@ -685,7 +688,7 @@ STEP 4. Update a workspace that was already synced.
   missing on the machine doing the sync. The size comparison is what catches
   that; a directory listing looks perfectly normal.
 
-STEP 5. Re-verify against the original:
+STEP 4. Re-verify against the original:
 
     4-verify-sync.sh --baseline-dir=<original>/${REL} \\
                      --candidate-dir=<workspace>/${REL}
@@ -693,6 +696,15 @@ STEP 5. Re-verify against the original:
   Expect a clean result except permissions: git carries only the owner execute
   bit, so group and other bits come from the umask of the shell that ran the
   sync. Section 5 says so explicitly when that is all it found.
+
+TO SEE WHAT THIS RUN ACTUALLY CONFIGURED, ask git rather than trusting the
+narration above:
+
+    cd ${DIR}
+    git config --list --local     # user.name, user.email, remote, lfs filters
+    git remote -v                 # expect ${REMOTE} at the ssh:// URL
+    git log --stat -1             # what went into the commit
+    git lfs ls-files              # which files became pointers
 
 EOF
 }
