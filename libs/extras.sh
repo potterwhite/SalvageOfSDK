@@ -401,8 +401,15 @@ libextras_bundle_write() {
 # child element some examples show is silently ignored -- and a non-self-closing
 # element here is the mistake that once turned <linkfile> entries into stray
 # top-level siblings repo quietly skipped.
+# The checkout path is .hooks and not .repo-hooks: manifest_xml.py rejects any
+# path component starting with ".repo", which repo reserves for its own .repo/
+# directory, with 'bad component: .repo-hooks' at repo init time.
+#
+# The .git suffix is appended here rather than carried in $1 because libs/gitlab.sh
+# appends it too when it builds the clone and push URLs. One bare name, both
+# consumers adding the suffix themselves.
 libextras_manifest_lines() {
     local name="$1"
-    echo "  <project path=\".repo-hooks\" name=\"${name}\" />"
-    echo "  <repo-hooks in-project=\"${name}\" enabled-list=\"post-sync\" />"
+    echo "  <project path=\".hooks\" name=\"${name}.git\" />"
+    echo "  <repo-hooks in-project=\"${name}.git\" enabled-list=\"post-sync\" />"
 }

@@ -4,7 +4,7 @@
 # NOT run by hand. `repo sync` runs this itself, on every sync, once the
 # manifest names it:
 #
-#     <project path=".repo-hooks" name="repo-hooks.git" />
+#     <project path=".hooks" name="repo-hooks.git" />
 #     <repo-hooks in-project="repo-hooks.git" enabled-list="post-sync" />
 #
 # That is the whole reason this file exists. A colleague's sync is three
