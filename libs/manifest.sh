@@ -78,6 +78,33 @@ libmanifest_begin() {
 EOF
 }
 
+# libmanifest_line: print one project element, without writing it anywhere.
+#
+# $1 -- project path, relative to the tree root
+# $2 -- repository name, without the .git suffix
+#
+# Split out from libmanifest_append so that a caller adopting a single directory
+# can print the line for review instead of appending it to a file. Both go
+# through here, which is the point: two formatters would eventually disagree
+# about escaping or attribute order, and the file they both write is the one
+# every clone of this SDK depends on.
+libmanifest_line() {
+    local rel="$1" repo_name="$2"
+
+    [ -n "$rel" ] || libutils_die "libmanifest_line: empty project path"
+    [ -n "$repo_name" ] || libutils_die "libmanifest_line: empty repository name for '$rel'"
+
+    # An absolute path yields a manifest that only works on the machine that
+    # generated it, so it is rejected rather than silently written.
+    case "$rel" in
+        /*) libutils_die "libmanifest_line: project path must be relative, got '$rel'" ;;
+    esac
+
+    printf '  <project path="%s" name="%s.git" />\n' \
+        "$(libmanifest_xml_escape "$rel")" \
+        "$(libmanifest_xml_escape "$repo_name")"
+}
+
 # libmanifest_append: record one finished project.
 #
 # $1 -- path to the .part file
@@ -87,24 +114,12 @@ EOF
 # Callers must invoke this only after that project's work has actually
 # succeeded. A line here means "done"; writing it beforehand would turn the
 # manifest from a record into a prediction.
-#
-# The path must be relative. An absolute one yields a manifest that only works
-# on the machine that generated it, so it is rejected rather than silently
-# written.
 libmanifest_append() {
     local part="$1" rel="$2" repo_name="$3"
 
     [ -f "$part" ] || libutils_die "libmanifest_append: $part does not exist (begin not called?)"
-    [ -n "$rel" ] || libutils_die "libmanifest_append: empty project path"
-    [ -n "$repo_name" ] || libutils_die "libmanifest_append: empty repository name for '$rel'"
 
-    case "$rel" in
-        /*) libutils_die "libmanifest_append: project path must be relative, got '$rel'" ;;
-    esac
-
-    printf '  <project path="%s" name="%s.git" />\n' \
-        "$(libmanifest_xml_escape "$rel")" \
-        "$(libmanifest_xml_escape "$repo_name")" >> "$part"
+    libmanifest_line "$rel" "$repo_name" >> "$part"
 }
 
 # libmanifest_finish: close the manifest and move it into place atomically.

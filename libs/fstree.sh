@@ -216,6 +216,103 @@ libfstree_list_empty_dirs() {
 }
 
 # ---------------------------------------------------------------------------
+# Survey
+# ---------------------------------------------------------------------------
+#
+# These two answer a different question from the listings above. A listing is
+# for comparing two trees; a survey is for looking at ONE tree and deciding
+# what in it is worth keeping. That decision -- which files are build output or
+# scratch and belong in a .gitignore -- cannot be made by a machine, because
+# a stale .o and a shipped .o are the same bytes. It can only be made by
+# someone who is shown what is there, before anything is committed.
+#
+# Before, not after, is the whole point: a large file that enters git history
+# can only be removed by rewriting that history.
+
+# libfstree_ext_histogram: print a per-extension tally with total sizes.
+#
+# $1 -- root
+#
+# Format: <count> <bytes> <extension>, largest total size first
+#
+# Sorted by total bytes rather than by count, because size is what decides
+# whether something matters: 12000 .o files worth 1.2G is a finding, 12000
+# .h files worth 4M is just a source tree.
+#
+# The extension is the text after the LAST dot of the basename, so
+# linaro-bookworm-6.1-arm64.tar.xz counts as "xz". Files with no dot are
+# reported as "(none)" -- which matters here, because compiled executables
+# usually have no extension at all and would otherwise vanish from the table.
+#
+# Directories are not counted. A directory has no size of its own worth
+# reporting, and libfstree_biggest is what shows a directory that is entirely
+# scratch.
+libfstree_ext_histogram() {
+    local root="$1"
+
+    libfstree_require_dir "$root" root
+
+    # -type f only: a symlink's own size is the length of its target text,
+    # which would be counted as if it were content.
+    find "$root" -mindepth 1 \( -name .git -o -name .repo \) -prune -o \
+        -type f -printf '%s\t%f\n' 2>/dev/null \
+        | awk -F'\t' '
+            {
+                name = $2
+                # No dot, or a leading dot with no other (".gitignore"), is
+                # not an extension. Treating ".gitignore" as extension
+                # "gitignore" would invent a file type that does not exist.
+                if (match(name, /.+\./)) {
+                    ext = substr(name, RLENGTH + 1)
+                } else {
+                    ext = "(none)"
+                }
+                count[ext]++
+                bytes[ext] += $1
+            }
+            END { for (e in count) printf "%d\t%d\t%s\n", count[e], bytes[e], e }
+        ' \
+        | LC_ALL=C sort -t"$(printf '\t')" -k2,2nr
+}
+
+# libfstree_biggest: print the largest immediate children of a tree, with sizes.
+#
+# $1 -- root
+# $2 -- how many to print
+#
+# Format: <bytes> <name>, largest first. Names are relative to the root, since
+# the caller printed the root already and repeating it on every line pushes the
+# sizes off the edge of a terminal.
+#
+# Immediate children only, and directories are totalled. This is what reveals
+# a directory that is entirely build output -- buildroot's output/ being the
+# case that matters -- which a per-file view cannot show: 40000 files of 30KB
+# each look unremarkable one at a time and are 1.2G together.
+libfstree_biggest() {
+    local root="$1" limit="$2"
+
+    libfstree_require_dir "$root" root
+
+    case "$limit" in
+        ''|*[!0-9]*) libutils_die "libfstree_biggest: count must be a number, got '$limit'" ;;
+    esac
+
+    # du, not find: only du totals a directory's contents.
+    #
+    # -k reports allocated blocks, which is what the disk actually holds and
+    # what an operator comparing against `du -sh` will see. Multiplied to bytes
+    # so both survey functions speak one unit and the caller formats once.
+    du -sk "$root"/* 2>/dev/null \
+        | LC_ALL=C sort -k1,1nr \
+        | head -n "$limit" \
+        | awk -F'\t' -v root="$root/" '{
+            name = $2
+            if (index(name, root) == 1) name = substr(name, length(root) + 1)
+            printf "%d\t%s\n", $1 * 1024, name
+          }'
+}
+
+# ---------------------------------------------------------------------------
 # Summaries
 # ---------------------------------------------------------------------------
 
