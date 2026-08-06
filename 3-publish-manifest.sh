@@ -82,10 +82,10 @@ Outputs:
   .gitignore            Written if absent, excluding the build logs.
   This directory becomes a git repository on the named branch.
 
-Afterwards, a colleague fetches the SDK with:
+Afterwards, a colleague fetches the SDK with these three commands:
   repo init -u <manifest url> -b <branch>
   repo sync -j4
-  They need git-lfs installed, or large files arrive as pointer stubs.
+  repo forall -c 'git lfs pull' -j4
 EOF
 }
 
@@ -408,12 +408,11 @@ func_report_clone(){
     echo
     libutils_say "published: ${url}"
     echo
-    echo "Colleagues fetch the SDK with:"
+    echo "Colleagues fetch the SDK with these three commands:"
     echo "  export REPO_URL=$(libgitlab_ssh_url "${GITLAB_URL}" team_tools git-repo)"
     echo "  repo init -u ${url} -b ${DEFAULT_BRANCH}"
     echo "  repo sync -j4"
-    echo
-    echo "They need git-lfs installed first, or large files arrive as pointer stubs."
+    echo "  repo forall -c 'git lfs pull' -j4"
 }
 
 # ============================================================================

@@ -196,7 +196,7 @@ $ git check-ignore -v build/linux/aarch64/make-Makefiles.bash
 cd /development/src/sdk/linux/sdk-reclaim
 
 # ① 只读扫描（不写 SDK、不碰网络）。55 个项目各跑一次 ls-files，需要几分钟
-python3 -m sdk_reclaim extract /home/developer/sdk/linux/rk3576-linux-6.1 \
+python3 -m sdk_reclaim extract <原始 SDK 路径> \
         -o inventory.json
 
 # ② 第一次【必然失败】—— 这是设计意图，不是 bug
@@ -240,7 +240,7 @@ python3 -m sdk_reclaim verify inventory.json && echo "READY"
 
 # ④ 生成清单
 python3 -m sdk_reclaim manifest inventory.json \
-        --host 192.168.3.67 --group team_rk3576 --protocol ssh \
+        --host <gitlab-host> --group <group> --protocol ssh \
         -o default.xml
 ```
 
@@ -305,14 +305,14 @@ find . -name config -path "*/.git/*" -exec \
 ```bash
 # 干净目录重新拉取
 mkdir /tmp/verify && cd /tmp/verify
-repo init -u git@192.168.3.67:team_rk3576/rk3576-manifests.git \
+repo init -u ssh://git@<gitlab-host>/<group>/manifests.git \
      -b main --no-clone-bundle
 repo sync -j8
-git lfs pull                    # ★ LFS 必须这步
+repo forall -c 'git lfs pull' -j4    # ★ 必须这步，否则大文件是指针
 
 # 与原树逐字节比对
 diff -r --no-dereference --brief \
-     /home/developer/sdk/linux/rk3576-linux-6.1 /tmp/verify \
+     <原始 SDK 路径> /tmp/verify \
      | grep -v -f known-drops.txt      # 必须为空
 
 # 终极验收：能编译出可运行的固件
