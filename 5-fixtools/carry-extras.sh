@@ -1,5 +1,5 @@
 #!/bin/bash
-set -ex
+set -e
 
 # carry-extras.sh -- Carry filesystem state across a rebuild that git drops.
 #
