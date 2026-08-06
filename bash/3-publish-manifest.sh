@@ -394,16 +394,22 @@ func_publish(){
 
 # func_report_clone: print the commands a colleague needs.
 #
-# The plain, credential-free URL from libgitlab_repo_url -- this text is meant
-# to be pasted into a chat window.
+# SSH, not HTTP: this text gets pasted into a chat window and run verbatim, and
+# over plain HTTP that fails with "Access denied" because no credential is
+# attached. Colleagues already have SSH keys on the server, and a key does not
+# expire or need storing in plaintext the way a PAT would.
+#
+# REPO_URL is included because the repo launcher otherwise downloads its own
+# source from gerrit.googlesource.com, which is not reachable from here.
 func_report_clone(){
     local url
-    url=$(libgitlab_repo_url "${GITLAB_URL}" "${GITLAB_GROUP}" "${MANIFEST_PROJECT}")
+    url=$(libgitlab_ssh_url "${GITLAB_URL}" "${GITLAB_GROUP}" "${MANIFEST_PROJECT}")
 
     echo
     libutils_say "published: ${url}"
     echo
     echo "Colleagues fetch the SDK with:"
+    echo "  export REPO_URL=$(libgitlab_ssh_url "${GITLAB_URL}" team_tools git-repo)"
     echo "  repo init -u ${url} -b ${DEFAULT_BRANCH}"
     echo "  repo sync -j4"
     echo

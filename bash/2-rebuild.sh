@@ -7,9 +7,10 @@ set -e
 
 # func_1_0_load_libs: source the shared libraries.
 #
-# gitlab.sh is deliberately not sourced: its functions assume
-# one-directory-per-invocation, while the loop here drives a batch with a shared
-# auth URL.
+# gitlab.sh is sourced only for its URL builders (libgitlab_ssh_url and the
+# libgitlab_host it calls). Its project/push functions are not used here: they
+# assume one-directory-per-invocation, while the loop below drives a batch with
+# a shared auth URL.
 #
 # BASH_SOURCE rather than $0, and readlink -f, so this works when the file is
 # sourced for testing or invoked through a symlink on PATH.
@@ -20,6 +21,7 @@ func_1_0_load_libs(){
     . "$libs/utils.sh"   # first: everything below calls libutils_die
     . "$libs/args.sh"
     . "$libs/gitrepo.sh"
+    . "$libs/gitlab.sh"
     . "$libs/manifest.sh"
 }
 
@@ -467,8 +469,14 @@ func_process_all(){
 
     echo -e "\n"
     echo ">>> [Manifest] 开始增量写入 ${MANIFEST_PART} ..."
+
+    # The manifest advertises SSH, not the HTTP URL we push over. Pushing is
+    # unattended and uses a PAT; fetching is done by colleagues, and `repo sync`
+    # runs its fetches in parallel with interactive prompting disabled, so an
+    # HTTP URL with no stored credential fails outright instead of asking.
     libmanifest_begin "${MANIFEST_PART}" \
-        "${GITLAB_URL}/${GITLAB_GROUP}/" "${GITLAB_URL}/" "${DEFAULT_BRANCH}"
+        "$(libgitlab_ssh_base "${GITLAB_URL}" "${GITLAB_GROUP}")" \
+        "${DEFAULT_BRANCH}"
 
     if [ "${DO_PUSH}" = yes ]; then
         func_prepare_auth
