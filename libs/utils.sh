@@ -17,13 +17,19 @@
 # Output
 # ---------------------------------------------------------------------------
 
-# libutils_say: print a progress line on stdout.
+# libutils_say: print a progress line on stderr.
 #
 # Prefixed with "==>" so our own narration stays visually separable from the
 # git and curl output we deliberately do not suppress. When a run goes wrong
 # halfway, the operator needs to see at a glance which line was ours.
+#
+# stderr, not stdout, for the same reason as libutils_warn: progress narration
+# is for the operator watching, never part of a script's result. A script whose
+# result goes to stdout can then be redirected with a plain '> file' while its
+# narration still reaches the terminal -- and the operator does not have to
+# strip "==>" lines back out of the file afterwards.
 libutils_say() {
-    echo "==> $*"
+    echo "==> $*" >&2
 }
 
 # libutils_warn: print a non-fatal advisory on stderr.

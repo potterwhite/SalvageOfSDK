@@ -44,8 +44,17 @@ Whatever you name is what gets compared. Pass two SDK roots to check the whole
 thing, or two subdirectories to check that part of it -- there is no option for
 narrowing the scope, because the arguments already are the scope.
 
-READ-ONLY. Neither tree is modified. Nothing is created except the report and
-its working files.
+READ-ONLY. Neither tree is modified.
+
+The report goes to stdout. Progress narration goes to stderr, so the two never
+mix: redirect stdout to keep the report, and the narration still reaches your
+terminal while the run is going.
+
+  ${0##*/} --baseline-dir=A --candidate-dir=B            report on screen
+  ${0##*/} --baseline-dir=A --candidate-dir=B > rep.txt  report in a file
+
+There is no --output option, because '>' already is one and is better at it:
+it also does '>>', '| less', '| grep FAIL', and a pipe into another program.
 
 Arguments:
   --baseline-dir=DIR   The tree that is presumed correct -- the vendor's original.
@@ -62,13 +71,12 @@ Arguments:
   swapping the two produces a differently worded report.
 
 Options:
-  --output=FILE      Where to write the report.
-                     default sdk-verify-report.txt in the current directory
   --work-dir=DIR     Where to keep the listings the report is computed from.
-                     default a 'work' directory beside the report
-                     Kept, not deleted: when the report says 4703 permissions
-                     differ, the file those lines came from is the only way to
-                     check that for yourself.
+                     default a directory under \$TMPDIR, removed on exit
+                     Name one to keep them: when the report says 4703
+                     permissions differ, the file those lines came from is the
+                     only way to check that for yourself. A directory you name
+                     is never removed; the default one always is.
   --skip-content     Skip the byte-for-byte file comparison (section 6).
                      The other five sections read only directory metadata and
                      finish in seconds; section 6 reads every byte of both
@@ -134,7 +142,7 @@ EOF
 # worse: --skip-contentt would be ignored too, but on a report the operator
 # then reads as a full verification when it was not one.
 func_1_2_check_options(){
-    OPTION_NAMES="baseline-dir candidate-dir output work-dir skip-content help"
+    OPTION_NAMES="baseline-dir candidate-dir work-dir skip-content help"
 
     libargs_check_known "$OPTION_NAMES" "$@"
 }
@@ -196,42 +204,82 @@ func_1_3_init_trees(){
 }
 
 # ============================================================================
-# 1_4  Output paths
+# 1_4  Working files
 # ============================================================================
 
-# func_1_4_init_paths: name the report and the working files.
+# func_1_4_init_paths: choose the working directory and arrange its removal.
 #
 # $@ -- the caller's raw arguments
 #
-# The work directory is created now, before the slow phases, so a run that
-# cannot write its output fails in the first second rather than after twenty
-# minutes of comparison.
+# Created now, before the slow phases, so a run that cannot write its working
+# files fails in the first second rather than after twenty minutes of
+# comparison.
+#
+# There is no report path to compute: the report goes to stdout.
+#
+# Two kinds of working directory, and the difference is who cleans up. A
+# directory the operator named is theirs -- they asked to keep the listings, so
+# removing them would destroy the evidence they asked for. The default one is
+# ours, under TMPDIR, and is removed on exit: a tool run repeatedly on 33 GB
+# trees that left a listing directory behind every time would silently fill the
+# disk, and nobody asked for those files.
 func_1_4_init_paths(){
-    local output work
+    local work
 
-    output=$(libargs_get output "sdk-verify-report.txt" "$@")
+    work=$(libargs_get work-dir "" "$@")
 
-    # Absolute, because the report records where its own working files are and
-    # that record must stay valid for a reader standing somewhere else.
-    case "$output" in
-        /*) REPORT="$output" ;;
-        *)  REPORT="$(pwd -P)/$output" ;;
-    esac
+    if [ -n "$work" ]; then
+        # Absolute, because the report prints this path for a reader who may be
+        # standing in a different directory than the run was.
+        case "$work" in
+            /*) WORK_DIR="$work" ;;
+            *)  WORK_DIR="$(pwd -P)/$work" ;;
+        esac
+        WORK_DIR_IS_OURS=no
 
-    work=$(libargs_get work-dir "${REPORT}.work" "$@")
-    case "$work" in
-        /*) WORK_DIR="$work" ;;
-        *)  WORK_DIR="$(pwd -P)/$work" ;;
-    esac
+        mkdir -p "$WORK_DIR" || libutils_die "cannot create work directory: $WORK_DIR"
+    else
+        WORK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/verify-sync.XXXXXX") || \
+            libutils_die "cannot create a temporary work directory under ${TMPDIR:-/tmp}"
+        WORK_DIR_IS_OURS=yes
+    fi
 
-    mkdir -p "$WORK_DIR" || libutils_die "cannot create work directory: $WORK_DIR"
     [ -w "$WORK_DIR" ] || libutils_die "work directory is not writable: $WORK_DIR"
 
     BODY="${WORK_DIR}/report.body"
 
+    # Registered after WORK_DIR is known and only for a directory we created.
+    # EXIT alone is not enough: the trap fires on 'set -e' and on a normal
+    # return, but a Ctrl-C during section 6 is a signal, and without INT and
+    # TERM the interrupted run -- the likeliest one, since it is the slow one --
+    # would be the one that leaks its listings.
+    if [ "$WORK_DIR_IS_OURS" = yes ]; then
+        trap func_1_4_cleanup EXIT INT TERM
+    fi
+
     # Stale listings from an earlier run against different trees would be read
     # by this run's comparisons and produce findings belonging to neither tree.
+    # Cannot happen in a fresh mktemp directory; can happen in a named one that
+    # is being reused, which is the point of allowing it to be named.
     rm -f "${WORK_DIR}"/*.lst "${WORK_DIR}"/*.diff "${WORK_DIR}"/*.tally 2>/dev/null || true
+}
+
+# func_1_4_cleanup: remove the working directory we created.
+#
+# Guards on WORK_DIR_IS_OURS as well as being installed only in that case,
+# because a trap outlives the reasoning that installed it: a later edit that
+# moves the trap earlier would otherwise delete a directory the operator named.
+#
+# Deleting a tree from a trap is worth being paranoid about. The guards are
+# what stand between a bug and 'rm -rf /': the variable must be non-empty, must
+# be ours, and must still look like the mktemp path we made.
+func_1_4_cleanup(){
+    [ "${WORK_DIR_IS_OURS:-no}" = yes ] || return 0
+    [ -n "${WORK_DIR:-}" ] || return 0
+
+    case "$WORK_DIR" in
+        */verify-sync.??????) rm -rf "$WORK_DIR" ;;
+    esac
 }
 
 # ============================================================================
@@ -275,14 +323,17 @@ func_1_6_check_deps(){
 func_1_7_report_config(){
     libutils_say "baseline:  ${BASELINE}"
     libutils_say "candidate: ${CANDIDATE}"
-    libutils_say "report:    ${REPORT}"
-    libutils_say "work dir:  ${WORK_DIR}"
+    if [ "$WORK_DIR_IS_OURS" = yes ]; then
+        libutils_say "work dir:  ${WORK_DIR} (temporary, removed on exit)"
+    else
+        libutils_say "work dir:  ${WORK_DIR} (kept)"
+    fi
     if [ "$SKIP_CONTENT" = yes ]; then
         libutils_say "content:   SKIPPED (--skip-content)"
     else
         libutils_say "content:   full byte-for-byte comparison"
     fi
-    echo
+    echo >&2
 }
 
 # ============================================================================
@@ -309,7 +360,7 @@ func_2_0_build_listings(){
         libfstree_list_links      "$tree" "${WORK_DIR}/${side}-links.lst"
         libfstree_list_empty_dirs "$tree" "${WORK_DIR}/${side}-empty.lst"
     done
-    echo
+    echo >&2
 }
 
 # ============================================================================
@@ -329,6 +380,23 @@ func_2_0_build_listings(){
 # reporting logic is four places for the wording and the counting to drift
 # apart -- and a report whose stated count disagrees with its own list is not
 # usable.
+# func_3_0_where: say where a truncated list can be read in full.
+#
+# $1 -- the working file holding the complete list
+#
+# One place, because the answer depends on something no single call site should
+# have to remember: the default working directory is deleted when the run ends,
+# so printing its path invites a reader to go looking for a file that is no
+# longer there. When the directory is temporary, the report says how to keep it
+# instead of naming a path that will be gone by the time it is read.
+func_3_0_where(){
+    if [ "$WORK_DIR_IS_OURS" = yes ]; then
+        echo "re-run with --work-dir=DIR to keep the full list"
+    else
+        echo "full list: $1"
+    fi
+}
+
 func_3_0_one_sided_section(){
     local number="$1" title="$2" base="$3" noun="$4" limit="$5" outvar="$6"
     local lost_file gained_file lost gained
@@ -349,13 +417,13 @@ func_3_0_one_sided_section(){
 
     if [ "$lost" -gt 0 ]; then
         libreport_line "$BODY" "IN BASELINE ONLY -- the rebuild did not reproduce these (${lost}):"
-        libreport_list "$BODY" "$lost_file" "$limit" "    "
+        libreport_list "$BODY" "$lost_file" "$limit" "    " "$(func_3_0_where "$lost_file")"
         libreport_line "$BODY" ""
     fi
 
     if [ "$gained" -gt 0 ]; then
         libreport_line "$BODY" "IN CANDIDATE ONLY -- these are not in the baseline (${gained}):"
-        libreport_list "$BODY" "$gained_file" "$limit" "    "
+        libreport_list "$BODY" "$gained_file" "$limit" "    " "$(func_3_0_where "$gained_file")"
         libreport_line "$BODY" ""
     fi
 
@@ -464,12 +532,12 @@ func_3_5_section_modes(){
     if [ "$n_unexplained" -gt 0 ]; then
         libreport_line "$BODY" "NOT EXPLAINED BY A UMASK DIFFERENCE (${n_unexplained}) -- read these:"
         libreport_line "$BODY" "(type, baseline mode, candidate mode, path)"
-        libreport_list "$BODY" "$unexplained" 200 "    "
+        libreport_list "$BODY" "$unexplained" 200 "    " "$(func_3_0_where "$unexplained")"
         libreport_line "$BODY" ""
         libreport_verdict "$BODY" FAIL "${n_unexplained} of ${n_diffs} differences are not umask-consistent"
     else
         libreport_line "$BODY" "Every difference is confined to group and other bits."
-        libreport_line "$BODY" "Full per-path list: ${diffs}"
+        libreport_line "$BODY" "$(func_3_0_where "$diffs")"
         libreport_line "$BODY" ""
         libreport_verdict "$BODY" FAIL "${n_diffs} entries differ, all umask-consistent (see the note above)"
     fi
@@ -516,7 +584,7 @@ func_3_6_section_content(){
 
     if [ "$n_diff" -gt 0 ]; then
         libreport_line "$BODY" "FILES WHOSE CONTENT DIFFERS (${n_diff}):"
-        libreport_list "$BODY" "$out" 200 "    "
+        libreport_list "$BODY" "$out" 200 "    " "$(func_3_0_where "$out")"
         libreport_line "$BODY" ""
     fi
 
@@ -525,7 +593,7 @@ func_3_6_section_content(){
     # claiming a check it never performed.
     if [ "$n_trouble" -gt 0 ]; then
         libreport_line "$BODY" "PATHS diff COULD NOT COMPARE (${n_trouble}) -- these were NOT verified:"
-        libreport_list "$BODY" "$trouble" 100 "    "
+        libreport_list "$BODY" "$trouble" 100 "    " "$(func_3_0_where "$trouble")"
         libreport_line "$BODY" ""
     fi
 
@@ -643,28 +711,50 @@ generated  ${RUN_STAMP}
 baseline   ${BASELINE}
 candidate  ${CANDIDATE}
 excluded   .git and .repo directories, everywhere
-listings   ${WORK_DIR}
+listings   $(func_4_3_listings_note)
 
 An entry "in baseline only" is one the rebuild failed to reproduce. One "in
 candidate only" is one it introduced. Neither tree was modified by this run.
 EOF
 }
 
-# func_4_4_report_result: print the verdict and where to read it.
+# func_4_3_listings_note: what the header says about the working files.
+#
+# Naming a temporary directory here would be worse than saying nothing: by the
+# time anyone reads a saved report, that path is gone, and a reader who checks
+# it concludes the report is stale rather than that the files were never kept.
+func_4_3_listings_note(){
+    if [ "$WORK_DIR_IS_OURS" = yes ]; then
+        echo "not kept (re-run with --work-dir=DIR to keep them)"
+    else
+        echo "${WORK_DIR}"
+    fi
+}
+
+# func_4_4_report_result: print the verdict and how to read it.
+#
+# On stderr, all of it. This is narration about the run, not part of the report:
+# with the report on stdout, a line printed here would land in the middle of
+# whatever file the operator redirected to -- after the body, under no section,
+# where a later reader would take it for a finding.
 func_4_4_report_result(){
-    echo
-    libutils_say "report written: ${REPORT}"
+    echo >&2
     libutils_say "overall: ${OVERALL}"
-    echo
+    echo >&2
     if [ "$OVERALL" = INCOMPLETE ]; then
-        echo "A section was skipped, so this run did not verify the two trees match."
-        echo "It found no difference in what it did compare. Re-run without"
-        echo "--skip-content for an answer that can be relied on."
+        libutils_say "A section was skipped, so this run did not verify the two trees match."
+        libutils_say "It found no difference in what it did compare. Re-run without"
+        libutils_say "--skip-content for an answer that can be relied on."
     fi
     if [ "$OVERALL" = FAIL ]; then
-        echo "Read the SUMMARY at the top of the report, then the sections it marks FAIL."
-        echo "Every count in the summary is backed by a file in ${WORK_DIR},"
-        echo "named in the section that reports it."
+        libutils_say "Read the SUMMARY at the top of the report, then the sections it marks FAIL."
+        if [ "$WORK_DIR_IS_OURS" = no ]; then
+            libutils_say "Every count in the summary is backed by a file in ${WORK_DIR},"
+            libutils_say "named in the section that reports it."
+        else
+            libutils_say "To see the full list behind every count instead of the first 200"
+            libutils_say "lines, re-run with --work-dir=DIR."
+        fi
     fi
 }
 
@@ -710,7 +800,7 @@ main(){
     func_3_6_section_content
 
     func_4_0_decide_overall
-    libreport_finish "$BODY" "$REPORT" "$(func_4_3_header)" "$(func_4_0_summary)"
+    libreport_emit "$BODY" "$(func_4_3_header)" "$(func_4_0_summary)"
     func_4_4_report_result
 
     [ "$OVERALL" = PASS ] || exit 1
