@@ -17,13 +17,19 @@
 # it was computed from.
 #
 # THE EXCLUSION RULE, stated once because every function obeys it:
-# entries named .git or .repo are pruned, along with everything under them.
-# They hold version-control metadata, not tree content -- a freshly cloned
-# tree and the tree it was cloned from have wildly different .git internals
-# while being byte-identical in every file that matters. Comparing them would
-# bury every real finding under noise. Nothing else is excluded: a build
-# artefact left in one tree and not the other IS a difference, and hiding it
-# would defeat the purpose.
+# entries named .git, .repo or .hooks are pruned, along with everything under
+# them. The first two hold version-control metadata, not tree content -- a
+# freshly cloned tree and the tree it was cloned from have wildly different
+# .git internals while being byte-identical in every file that matters.
+# Comparing them would bury every real finding under noise.
+#
+# .hooks is this toolchain's own checkout, placed there by the manifest so that
+# repo can run the post-sync hook. It exists in a synced tree and in no vendor
+# package, so leaving it in would report our own tooling as content the
+# baseline is missing.
+#
+# Nothing else is excluded: a build artefact left in one tree and not the other
+# IS a difference, and hiding it would defeat the purpose.
 #
 # FIELD SEPARATOR: listings use a literal tab between fields, because a
 # filename may legally contain spaces and a space-separated listing would
@@ -95,9 +101,9 @@ libfstree_warn_odd_names() {
     # records and lines, so these two counts disagree exactly when something is
     # wrong: -print0 emits one NUL per entry whatever the name contains, while
     # a newline inside a name adds a line to the -printf count.
-    nul=$(find "$root" -mindepth 1 \( -name .git -o -name .repo \) -prune -o -print0 2>/dev/null \
+    nul=$(find "$root" -mindepth 1 \( -name .git -o -name .repo -o -name .hooks \) -prune -o -print0 2>/dev/null \
         | tr -cd '\0' | wc -c | tr -d ' ')
-    plain=$(find "$root" -mindepth 1 \( -name .git -o -name .repo \) -prune -o -printf '%p\n' 2>/dev/null \
+    plain=$(find "$root" -mindepth 1 \( -name .git -o -name .repo -o -name .hooks \) -prune -o -printf '%p\n' 2>/dev/null \
         | wc -l | tr -d ' ')
 
     if [ "$nul" != "$plain" ]; then
@@ -126,7 +132,7 @@ libfstree_warn_odd_names() {
 libfstree_list_top() {
     local root="$1" out="$2"
 
-    find "$root" -mindepth 1 -maxdepth 1 \( -name .git -o -name .repo \) -prune -o \
+    find "$root" -mindepth 1 -maxdepth 1 \( -name .git -o -name .repo -o -name .hooks \) -prune -o \
         -type l -printf '%y\t%P\t-> %l\n' -o \
         -printf '%y\t%P\n' 2>/dev/null \
         | LC_ALL=C sort > "$out"
@@ -148,7 +154,7 @@ libfstree_list_top() {
 libfstree_list_entries() {
     local root="$1" out="$2"
 
-    find "$root" -mindepth 1 \( -name .git -o -name .repo \) -prune -o \
+    find "$root" -mindepth 1 \( -name .git -o -name .repo -o -name .hooks \) -prune -o \
         -printf '%y\t%P\n' 2>/dev/null \
         | LC_ALL=C sort > "$out"
 }
@@ -167,7 +173,7 @@ libfstree_list_entries() {
 libfstree_list_modes() {
     local root="$1" out="$2"
 
-    find "$root" -mindepth 1 \( -name .git -o -name .repo \) -prune -o \
+    find "$root" -mindepth 1 \( -name .git -o -name .repo -o -name .hooks \) -prune -o \
         -printf '%y\t%m\t%P\n' 2>/dev/null \
         | LC_ALL=C sort > "$out"
 }
@@ -186,7 +192,7 @@ libfstree_list_modes() {
 libfstree_list_links() {
     local root="$1" out="$2"
 
-    find "$root" -mindepth 1 \( -name .git -o -name .repo \) -prune -o \
+    find "$root" -mindepth 1 \( -name .git -o -name .repo -o -name .hooks \) -prune -o \
         -type l -printf '%P\t-> %l\n' 2>/dev/null \
         | LC_ALL=C sort > "$out"
 }
@@ -210,7 +216,7 @@ libfstree_list_links() {
 libfstree_list_empty_dirs() {
     local root="$1" out="$2"
 
-    find "$root" -mindepth 1 \( -name .git -o -name .repo \) -prune -o \
+    find "$root" -mindepth 1 \( -name .git -o -name .repo -o -name .hooks \) -prune -o \
         -type d -empty -printf '%P\n' 2>/dev/null \
         | LC_ALL=C sort > "$out"
 }
@@ -254,7 +260,7 @@ libfstree_ext_histogram() {
 
     # -type f only: a symlink's own size is the length of its target text,
     # which would be counted as if it were content.
-    find "$root" -mindepth 1 \( -name .git -o -name .repo \) -prune -o \
+    find "$root" -mindepth 1 \( -name .git -o -name .repo -o -name .hooks \) -prune -o \
         -type f -printf '%s\t%f\n' 2>/dev/null \
         | awk -F'\t' '
             {

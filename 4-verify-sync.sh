@@ -116,8 +116,10 @@ What is excluded, everywhere:
   .git and .repo directories, and everything under them. They hold version
   control metadata, not tree content: a clone and its origin differ wildly
   inside .git while being identical in every file that matters, and comparing
-  them buries every real finding. Nothing else is excluded -- a build artefact
-  present in one tree only IS a difference and is reported as one.
+  them buries every real finding. Also .hooks, this toolchain's own checkout,
+  which a synced tree has and no vendor package does. Nothing else is excluded
+  -- a build artefact present in one tree only IS a difference and is reported
+  as one.
 
 Exit status:
   0  PASS        every section ran and found no difference
@@ -710,7 +712,7 @@ Tree comparison report
 generated  ${RUN_STAMP}
 baseline   ${BASELINE}
 candidate  ${CANDIDATE}
-excluded   .git and .repo directories, everywhere
+excluded   .git, .repo and .hooks directories, everywhere
 listings   $(func_4_3_listings_note)
 
 An entry "in baseline only" is one the rebuild failed to reproduce. One "in

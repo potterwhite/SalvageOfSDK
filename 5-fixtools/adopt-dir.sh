@@ -442,8 +442,8 @@ func_1_11_survey(){
 SURVEY: ${REL}
 ============================================================================
 total size   $(du -sh "$DIR" 2>/dev/null | cut -f1)
-files        $(find "$DIR" -mindepth 1 \( -name .git -o -name .repo \) -prune -o -type f -print 2>/dev/null | wc -l)
-symlinks     $(find "$DIR" -mindepth 1 \( -name .git -o -name .repo \) -prune -o -type l -print 2>/dev/null | wc -l)
+files        $(find "$DIR" -mindepth 1 \( -name .git -o -name .repo -o -name .hooks \) -prune -o -type f -print 2>/dev/null | wc -l)
+symlinks     $(find "$DIR" -mindepth 1 \( -name .git -o -name .repo -o -name .hooks \) -prune -o -type l -print 2>/dev/null | wc -l)
 .gitignore   $(func_1_11_gitignore_note)
 
 BY FILE TYPE (largest total first)
