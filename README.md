@@ -1,349 +1,303 @@
-# sdk-reclaim
+# SalvageOfSDK
 
-**把一个被厂家剥掉元数据的 SDK 压缩包，变回可以 `repo` 管理的多仓库工程。**
+**把一个「解包的厂商 SDK tarball」变成「`repo init` + `repo sync` 可拉取的 GitLab 工作区」。**
 
-面对的场景：厂家（二层开发板商）给你一个 10GB 的 `tar.xz`，里面 55 个 `.git` 全是断链符号链接，`.repo/` 已被删除，git 历史归零。你要把它变成团队能 `repo init && repo sync` 拉下来、能编译、能跑的工程。
-
----
-
-## 一、为什么需要一个工具，而不是一个脚本
-
-朴素做法是写一个循环：遍历每个项目 → `git init` → `git add .` → `commit` → `push`。这个做法**会成功运行，并且悄悄丢文件**。
-
-在真实的 rk3576 SDK 上，它会丢掉：
-
-- `docs/` 下 **322 个 Rockchip PDF 文档**（不可再生）
-- `external/mpp/build/` 下 **27 个交叉编译脚本**（丢了 mpp 编不出来）
-- `kernel-6.1` 的 **Mali GPU 固件** `mali_csffw.bin`（丢了 GPU 跑不起来）
-- `debian/` + `ubuntu/` 共 **2.3GB**（厂家板级定制的主体，零 `.git`）
-
-而且**不会报任何错**。你几个月后要查一份数据手册时才会发现。
-
-根因有两个：
-
-1. **`.gitignore` 是给上游开发流程写的，不是给你的快照写的。** 上游可以 `git add -f` 强加文件，历史里有记录就永久跟踪；**你没有历史，所以每一个这样的决定都必须重做一次**。
-2. **`find -name ".git"` 会骗你。** 它把断链符号链接和真实仓库报告成一样。55 个"仓库"实际是 55 个断链——如果不先分类就动手，你会以为有 55 份历史可救，实际是 0。
-
-所以工具的价值不在"自动化推送"，而在**把所有隐性损失变成一份显式的、人可审查的清单**。
+> **新接手？直接按下面 7 步走，这就是唯一入口。**
+> 每步末尾的「⚠️ 卡住了」就是该步的排错表，排错不单独成文。
 
 ---
 
-## 二、四阶段架构：核心是那条线
+## 适用前提
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│                      SDK 目录（10GB）                         │
-│         55 个断链 .git  +  未知的孤儿  +  未知的 ignore 损失   │
-└────────────────────────────┬─────────────────────────────────┘
-                             │
-              ┌──────────────▼──────────────┐
-              │   ① extract.py  【只读】     │
-              │   诊断损坏类型               │
-              │   提取项目清单（从符号链接）  │
-              │   找孤儿 / 大文件 / ignore   │
-              └──────────────┬──────────────┘
-                             │
-                   ┌─────────▼─────────┐
-                   │  inventory.json   │  ← ★ 稳定契约 ★
-                   │  人可读 / 可 diff  │     纯文本，可进版本控制
-                   └─────────┬─────────┘
-                             │
-         ╔═══════════════════▼═══════════════════╗
-         ║        ★ 人工审查闸门 ★               ║   ← 唯一需要
-         ║  给每条 ignore 损失标 keep / drop     ║      工程判断的地方
-         ║  每个 drop 都要写理由                 ║
-         ╚═══════════════════╤═══════════════════╝
-                             │
-              ┌──────────────▼──────────────┐
-              │   ② verify.py   【只读】     │
-              │   6 项断言，有问题 exit 1    │
-              │   ★ 未分类项 = 硬失败 ★      │
-              └──────────────┬──────────────┘
-                             │  只有全部通过才能往下
-              ┌──────────────▼──────────────┐
-              │   ③ execute.py  【幂等】     │
-              │   只读 inventory，不再判断   │
-              │   state.json 支持 --resume   │
-              │   对 keep 项用 git add -f    │
-              └──────────────┬──────────────┘
-                             │
-              ┌──────────────▼──────────────┐
-              │   ④ manifest.py + 验证       │
-              │   生成 default.xml           │
-              │   repo sync → diff -r 原树   │
-              │   → ./build.sh 出 update.img │
-              └──────────────────────────────┘
-```
+- 厂商给的是 tarball（解包后**全树没有可用 `.git`**：要么没有，要么只剩骨架/断链），不是 git 仓库
+- 有一台内网 GitLab，你有建组权限
+- 磁盘：原始包 + 重建树 + 验证树，准备 **100G 以上**（AOSP 级别准备 250G+）
 
-### 那条线是什么
+## 铁律（违反了会返工或出事）
 
-**在「提取事实」和「执行变更」之间，横着一条不可逾越的线。** 上面只读，下面才写。
+1. **原始解包树设为只读，永不写入。** 它是唯一合法基线。
+   一旦被污染，你就再也无法证明重建结果是对的。
+2. **token 永不落盘。** 不进脚本、不进 commit、不进日志、不进 `.git/config`、不进笔记。
+   只作为命令行参数传入。
+3. **`--push` 之前做完一切。** 脚本默认不推，加 `--push` 才推。
+4. **每次重跑必须安全。** 不允许覆盖数据这类灾难后果。
 
-原来的一体式脚本把两者混在一个循环里，产生三个结构性缺陷：
+## 工具总览
 
-| 缺陷 | 表现 |
-|---|---|
-| **破坏性** | `rm -rf .git` 之后 push 失败 → 原状态不可恢复 |
-| **不可重放** | 重跑时走到 `.git not found` → **静默 `continue` 跳过**，你以为成功了 |
-| **不可审查** | 决策发生在运行时，人看不到，无法在执行前 review |
-
-拆开之后，失败永远发生在只读阶段，代价是零。
-
-### 为什么这叫"降熵"
-
-高熵来自**未知的未知**。`inventory.json` 的作用是把所有未知**物化成一份文本**。
-
-一旦落到文本，它就能被 `diff`、被 code review、被提交进 git、在换下一个 SDK 时**对比差异**。
-
-**换 SDK 时只有 `extract.py` 需要适配，后三段的契约不变。** 这是这套方法能复用的根本原因——SDK 特定的脏活被隔离在一个地方。
-
----
-
-## 三、模块如何协作
-
-```
-                          cli.py
-                    （argparse 分发，四个子命令）
-                             │
-        ┌────────────┬───────┴───────┬──────────────┐
-        ▼            ▼               ▼              ▼
-   extract.py    verify.py      execute.py     manifest.py
-    【只读】      【只读】        【未实现】      【只读】
-        │            │               │              │
-        │ 写         │ 读            │ 读           │ 读
-        ▼            ▼               ▼              ▼
-   ┌─────────────────────────────────────────────────────┐
-   │              inventory.json                          │
-   │   模块间【唯一】的通信媒介。没有共享内存状态，        │
-   │   没有隐式耦合。每个模块可独立测试和替换。            │
-   └─────────────────────────────────────────────────────┘
-```
-
-**关键设计：模块之间不互相 import**（除了 `cli.py` 按需延迟导入）。它们只通过 `inventory.json` 通信。所以你可以用任何语言重写任何一个阶段，只要遵守 JSON 契约。
-
-### 各模块职责
-
-| 模块 | 输入 | 输出 | 副作用 |
-|---|---|---|---|
-| `extract.py` | SDK 目录 | `inventory.json` | **无**（对 SDK 全程只读） |
-| `verify.py` | `inventory.json` | 报告 + exit code | **无** |
-| `execute.py` | `inventory.json` | GitLab 项目 + `state.json` | 写 GitLab、写 `.git` |
-| `manifest.py` | `inventory.json` | `default.xml` | 无 |
-
----
-
-## 四、extract.py 里最重要的三个函数
-
-### `classify_git_entry()` — 为什么 `find` 会骗你
-
-```python
-if p.is_symlink():
-    target = os.readlink(p)
-    return ("real-dir" if p.exists() else "broken-symlink"), target
-```
-
-`p.exists()` 会跟随符号链接，所以返回 `False` 就意味着**断链**。
-
-顺序很重要：`is_symlink()` 必须在 `is_dir()` 之前判断。否则一个恰好能解析的符号链接会被误报成 `real-dir`，而**丢掉 target 路径——那是我们唯一的化石证据**。
-
-### `diagnose()` — 三种损坏类型，做法完全不同
-
-| 诊断 | 含义 | 正确做法 |
+| 脚本 | 干什么 | 写不写网络 |
 |---|---|---|
-| `healthy` | `.repo` 在，真实仓库在 | 正常解析清单，**别用这个工具** |
-| `repo-meta-deleted` | `.repo` 没了但对象库还在 | **历史可抢救！先救再重建** |
-| `metadata-stripped` | 只剩断链符号链接 | 历史不存在，只能快照重建 |
+| （手工） | 解包 tarball，设只读 | — |
+| `2-rebuild.sh` | 逐子项目 `git init` + `add` + `commit`，建 GitLab 仓库，推送，生成 `default.xml` | 是 |
+| `3-publish-manifest.sh` | 把 `default.xml` 发布为 manifest 仓库 | 是 |
+| `4-verify-sync.sh` | 拿 `repo sync` 出来的树和只读基线做 6 项断言 | 否（只读） |
+| `5-fixtools/adopt-dir.sh` | 补收 repo 从未管理过的目录 | 是 |
+| `5-fixtools/carry-extras.sh` | 记录+回放空目录和权限位 | 是 |
+| `5-fixtools/post-sync.py` | repo hook，sync 后重建空目录 | — |
 
-**判错 `repo-meta-deleted` 是代价最大的错误**——你会毫无必要地摧毁可恢复的历史。所以工具第一件事就是报诊断，让你在动手前看到。
+`libs/` 是共享库，外部脚本尽量薄。`libs/gitlab.sh` 管凭据，**故意不进 hook 分发包**。
 
-### `audit_ignored()` — 全工具最重要的函数
+每个脚本都有 `-h`，参数细节以 `-h` 为准。
 
-```python
-# 裸仓库建在 /tmp，--work-tree 指向 SDK
-# → git 能回答 ignore 问题，但绝不在 SDK 里创建 .git
-gd = os.path.join(probe, p.replace("/", "_") + ".git")
-_run(["git", "init", "-q", "--bare", gd])
-_run(["git", f"--git-dir={gd}", f"--work-tree={wt}",
-      "ls-files", "-o", "-i", "--exclude-standard"])
-```
+> `archived/` 是废弃方案（python / bash / rust 三代尝试），仅作历史保留。
+> 尤其 `archived/python/README.md` 曾经占据仓库根 README 的位置误导读者 —— 不要照它操作。
 
-`-o` 列出未跟踪文件，`-i` 限定到其中被忽略的。新仓库里什么都没跟踪，所以结果恰好是 **`git add .` 会跳过的集合**。
+---
 
-**为什么必须问 git，不能自己解析 `.gitignore`：**
-
-`external/mpp` 是决定性证据：
-
-```
-external/mpp/.gitignore:87:      /build          ← 根规则排除整个 build/
-external/mpp/build/.gitignore:   !*.bash         ← 嵌套规则想救回脚本
-```
+## 第 1 步 · 解包并锁死基线
 
 ```bash
-$ git check-ignore -v build/linux/aarch64/make-Makefiles.bash
-.gitignore:87:/build   build/linux/aarch64/make-Makefiles.bash
-     ↑ 根规则获胜
+# 解包到只读目录（命名带 -readonly 后缀，提醒自己）
+tar -xf <厂商包> -C <path>/<sdk>-readonly
+
+# 锁死
+chmod -R a-w <path>/<sdk>-readonly
 ```
 
-**根规则排除了整个目录，git 就不再下降进入其中，所以嵌套的 `!*.bash` 永远不可达。** 上游必然是靠 `git add -f` 强加的。
-
-⇒ **任何"读 `.gitignore` 文本来推断"的实现都是错的。** git 的目录剪枝语义让人的直觉失效。
-
----
-
-## 五、怎么用
+再复制一份作为**重建源**（所有 `.gitignore` 修改都在这里做）：
 
 ```bash
-cd /development/src/sdk/linux/sdk-reclaim
-
-# ① 只读扫描（不写 SDK、不碰网络）。55 个项目各跑一次 ls-files，需要几分钟
-python3 -m sdk_reclaim extract <原始 SDK 路径> \
-        -o inventory.json
-
-# ② 第一次【必然失败】—— 这是设计意图，不是 bug
-python3 -m sdk_reclaim verify inventory.json
-#   → "610 ignored file(s) have no keep/drop rule. Refusing to guess"
+cp -a <path>/<sdk>-readonly <path>/<sdk>-rebuild
+chmod -R u+w <path>/<sdk>-rebuild
 ```
 
-### 人工审查（唯一需要工程判断的一步）
-
-在 `inventory.json` 的 `ignored_adjudication` 数组里填规则。**顺序敏感，先匹配的先赢**，所以特例写在前面：
-
-```jsonc
-"ignored_adjudication": [
-  { "pattern": "docs/cn/**/*.pdf", "action": "keep",
-    "reason": "Rockchip 开发文档，不可再生（322 个）" },
-  { "pattern": "external/mpp/build/**", "action": "keep",
-    "reason": "交叉编译脚本，被根规则 /build 误伤；上游靠 add -f" },
-  { "pattern": "**/mali_csffw.bin", "action": "keep",
-    "reason": "Mali GPU 固件，运行必需" },
-  { "pattern": "buildroot/dl/**", "action": "drop",
-    "reason": "上游下载缓存 2.5GB，可重新下载" },
-  { "pattern": "external/rkwifibt/**/*.cmd", "action": "drop",
-    "reason": "内核编译残留（厂家脏树）" }
-]
-```
-
-**每个 `drop` 都必须有证据，不能靠猜。**
-
-范例——`device/rockchip/.gitignore` 内容是 `.*` + `/*`（极激进），会丢掉 `.chip` 符号链接。判定它安全的依据不是"看起来像临时文件"，而是找到了：
-
-```
-device/rockchip/common/scripts/mk-config.sh:19:  rm -rf "$RK_CHIP_DIR"
-device/rockchip/common/scripts/mk-config.sh:20:  ln -rsf "$(dirname "$DEFCONFIG")" "$RK_CHIP_DIR"
-```
-
-构建期会重建 → 可以安全丢弃。**这才是一条合格的 drop 理由。**
+**检查点：** 记录基线里 `.git` 骨架的数量，之后每次大动作前后都复核它不变：
 
 ```bash
-# ③ 直到 unclassified 归零
-python3 -m sdk_reclaim verify inventory.json && echo "READY"
-
-# ④ 生成清单
-python3 -m sdk_reclaim manifest inventory.json \
-        --host <gitlab-host> --group <group> --protocol ssh \
-        -o default.xml
+find <path>/<sdk>-readonly -name .git | wc -l
 ```
 
----
+> rk3576 的 tarball 一个 `.git` 都没有（数量 = 0）；rk3588-android12 有 1084 个骨架。
+> 两种都正常 —— 关键是**这个数就是你发现项目边界的依据，且不允许中途变化**。
 
-## 六、verify.py 的 6 项断言
+### ⚠️ 卡住了
 
-每一项都对应一次真实的踩坑。写成断言，就不会再犯第二次。
-
-| # | 断言 | 不做会怎样 |
-|---|---|---|
-| 1 | 扁平化后无命名冲突 | `/`→`-` 后两个路径撞名，第二次 push **强制覆盖第一个**，仓库内容错了但无任何报错 |
-| 2 | 父仓库排除嵌套子仓库 | `docs/` → `docs/cn/` → `docs/cn/RK3576/` 三层。父提交吞掉子文件，`repo sync` 时冲突 |
-| 3 | **每个 ignore 文件已分类** | **静默丢 322 个 PDF / 27 个编译脚本** |
-| 4 | 超限文件已配 LFS | push 到第 40 个项目才失败，GitLab 组已半迁移 |
-| 5 | 无 `.` 开头的 path | repo 报 `bad component`，且残缺的 `.repo` 无法修复，只能删目录重来 |
-| 6 | 孤儿有归属 | **debian/ + ubuntu/ 共 2.3GB 直接消失** |
-
----
-
-## 七、execute.py 为什么故意没实现
-
-它是唯一会写 GitLab、写磁盘的阶段。**在你审过 `inventory.json` 之前就把它写出来，等于鼓励跳过审查闸门**——而那个闸门是唯一能防住静默丢数据的东西。
-
-现在跑它会打印契约然后 `exit 2`：
-
-```
-- 只读 inventory.json，运行时不再做任何判断
-- 幂等创建 GitLab 项目（GET 探测 → POST，容忍 400 already taken）
-- 每项目：git init -b main → 写 .gitattributes(LFS) → git add
-          → 对每条 keep 规则 git add -f → commit → push
-- 状态落盘 state.json 支持 --resume
-- 绝不 rm -rf SDK 内任何东西
-- token 从 $GITLAB_TOKEN 读，完成后清理 .git/config 里的凭证
-```
-
-最后一条很重要：`auth_url` 方案会把 PAT 明文写进 55 个 `.git/config`。收尾要清理：
-
-```bash
-find . -name config -path "*/.git/*" -exec \
-  sed -i 's|://[^:]*:[^@]*@|://|' {} \;
-```
-
----
-
-## 八、为什么选 Python
-
-不是偏好，是三条具体理由：
-
-1. **`repo` 本身就是 Python**（本机 launcher 2.17 / Python 3.10）。用户环境里必然有。
-2. **核心工作是调 `git` + 处理 XML/JSON**，无计算瓶颈。Rust 的性能优势在这里用不上——瓶颈是 `git` 子进程和磁盘 IO。
-3. **读者是嵌入式工程师。** 这个工具的价值在于被人读懂、被人改。Python 门槛最低。
-
-**选它是因为要被人读和改，不是因为要快。**
-
----
-
-## 九、验收标准
-
-不是"脚本跑完没报错"，而是：
-
-```bash
-# 干净目录重新拉取
-mkdir /tmp/verify && cd /tmp/verify
-repo init -u ssh://git@<gitlab-host>/<group>/manifests.git \
-     -b main --no-clone-bundle
-repo sync -j8
-repo forall -c 'git lfs pull' -j4    # ★ 必须这步，否则大文件是指针
-
-# 与原树逐字节比对
-diff -r --no-dereference --brief \
-     <原始 SDK 路径> /tmp/verify \
-     | grep -v -f known-drops.txt      # 必须为空
-
-# 终极验收：能编译出可运行的固件
-./build.sh lunch      # 选 topeet_rk3576_defconfig
-./build.sh            # → output/firmware/update.img
-```
-
-**"没报错"不等于"成功"。** 原脚本失败后重跑会静默跳过。终态验证不可省略。
-
----
-
-## 十、可复用的经验（不限于 SDK）
-
-1. **`find -name ".git"` 会骗你。** 先用 `-xtype l` / `-type d` 分类，再行动。
-2. **区分"本地损坏"和"上游剥离"。** 扫原始压缩包即可判定，省下大量徒劳。
-3. **断链的符号链接是化石。** 它的 target 保存了原始结构。损坏的元数据往往仍携带可提取信息，别急着删。
-4. **`.gitignore` 是给上游写的，不是给你的快照写的。** 用 `git check-ignore -v` 逐文件裁决，每个 drop 都要有证据。
-5. **只读取证工具绝不能污染现场。** `git init --bare` 到临时目录 + `--work-tree`。
-6. **在"提取事实"和"执行变更"之间划线。** 中间产物必须是人可读、可 diff 的文本。
-7. **拒绝猜测胜过静默默认。** 不知道就硬失败。静默的不完整比响亮的失败危险得多。
-8. **诚实记录损失。** 历史确实丢了、某些文件确实没进 git——写进文档，而不是假装完整。
-
----
-
-## 附：当前状态
-
-| 阶段 | 状态 |
+| 症状 | 处置 |
 |---|---|
-| `extract.py` | 逻辑完整，**未在真实 SDK 上跑过** |
-| `verify.py` | 逻辑完整，未跑过 |
-| `manifest.py` | 逻辑完整，未跑过 |
-| `execute.py` | **故意未实现**（见第七节） |
+| 基线里 `.git` 数量和上次记录不一致 | 已被污染。重新解包，别省这一步 |
+| 磁盘不够 | 单棵树 20-70G，至少留 3 棵的空间 |
 
-侦察阶段的**事实**（55 个断链、610 条 ignore 损失、70 个孤儿、9 个大文件、`mpp` 的不可达规则）全部是本机实测验证过的。**这些代码是把那些手工命令固化下来的产物，本身尚未端到端跑通。**
+---
+
+## 第 2 步 · 修 `.gitignore`（**最费时的一步**）
+
+### 为什么必须修
+
+`.gitignore` **只对未跟踪文件生效**。厂商上游仓库里被规则命中的文件早已是
+tracked 状态，规则对它们无效。你从 tarball `git init` + 全新 `git add`，
+**没有任何文件是 tracked**，豁免消失 —— 规则会吞掉本该保留的源码。
+
+**这不是厂商写错了。** 在厂商的语境里那些规则是正确的。
+
+### 判断规则（唯一标准）
+
+> **只要能够被编译出来的，都是临时文件，只保留源文件。**
+
+不追求 bitwise 一致，**追求能编译通过**。两者难度差距大的时候，选后者。
+
+### 怎么做
+
+**不要一次性扫全树列个大清单。** 一个大目录一个大目录地过。
+
+```bash
+# 1) 先做一轮 2-rebuild + 4-verify，拿到缺失清单
+#    产物：<work-dir>/entries-missing.diff
+
+# 2) 按项目统计，从数量最多的开始
+awk -F'\t' '{split($2,a,"/"); print a[1]"/"a[2]}' entries-missing.diff | sort | uniq -c | sort -rn
+```
+
+对每个项目：
+
+```bash
+# 3) 看这批文件到底是什么（在只读基线里看，不是重建树）
+cd <readonly>/<project>
+find <被吞的目录> | sort
+
+# 4) 定位是哪条规则吞的
+git -C <rebuild>/<project> check-ignore -v <文件路径>
+```
+
+然后判断：**这些文件里有几个是构建产物？**
+
+- 大部分是产物 → 保留规则，只放行少数（例：`kernel-6.1` 90 项里 66 项是产物）
+- **全部是源码** → 规则整条删掉（例：`external/mpp/build/` 41 项全是源码）
+
+### 已解决的案例（照抄即可）
+
+| 项目 | 规则 | 结论 |
+|---|---|---|
+| `kernel-6.1` | 多条 | 90 项里 66 项确为产物，放行其余 |
+| `external/rkwifibt` | `.gitignore:80` 的 `/debian/` | **整行删掉，不加替代**。厂商自己的 `debian/.gitignore` 13 行本来就完整，删掉父级规则它就生效了 |
+| `external/mpp` | `.gitignore:87` 的 `/build` | `build/` 下 41 项**全是源码，0 产物**。用白名单放行 |
+
+`external/mpp` 的白名单写法：
+
+```gitignore
+/build/**
+!/build/**/
+!/build/**/.gitignore
+!/build/**/*.bash
+!/build/**/*.bat
+!/build/**/*.cmake
+!/build/**/*.in
+!/build/**/*.md
+!/build/**/*.sh
+```
+
+> **`!/build/**/` 必须在第一位。** 它放行的是**目录**（结尾斜杠）。
+> 少了它，`/build/**` 会挡住子目录本身，git 不递归进去，后面所有放行行全部失效。
+> 这是这段规则里唯一的坑。
+
+### ⚠️ 卡住了
+
+| 症状 | 处置 |
+|---|---|
+| 想用 `git add -f` 绕过 | **不要。** 治不了根，下次重建又是一样。改 `.gitignore` 本身 |
+| 子目录有 `.gitignore` 写了 `!*.sh` 却不生效 | **死否定**：父级规则已剪掉整个目录，git 不会递归进去读它。删父级规则 |
+| `git check-ignore` 报 `--non-matching is only valid with --verbose` | `-n` 必须配 `-v` |
+| `git check-ignore --no-index --stdin` 喂**不存在**的路径，目录斜杠规则永不匹配 | 它无法知道路径是目录。这种验证方式无效，别用 |
+| 用 `entries-missing.diff` 过滤时把目录和文件搞混 | 格式是 `%y\t%P`，**`%P` 不给目录加尾斜杠**。`d`/`f` 只在第 1 列。必须 `awk -F'\t' '$1=="f"'`，不能 `grep -v '/'` |
+| 项目里有大量无扩展名的可执行产物 | 黑名单挡不住（例：mpp 约 48 个 `*_test`）。用白名单 |
+
+---
+
+## 第 3 步 · 重建并推送
+
+```bash
+<SalvageOfSDK>/2-rebuild.sh <rebuild-dir> \
+	--gitlab-url="http://<server>" \
+	--gitlab-group="<GROUP>" \
+	--git-user-name="<name>" \
+	--git-user-email="<email>" \
+	--gitlab-token="$GITLAB_TOKEN" \
+	2>&1 | tee -a ./build-$(date +%b%d.%Y-%H%M%S).log
+```
+
+> `2-rebuild.sh` **不要改**。
+> token 用环境变量，别写进命令历史：先 `read -s GITLAB_TOKEN` 再跑。
+
+**检查点：** 日志尾部无 error；GitLab 上项目数对得上。
+
+### ⚠️ 卡住了
+
+| 症状 | 处置 |
+|---|---|
+| 构建日志里出现明文 token | git-lfs 会回显带凭据的 push URL。**日志不要提交**，这也是 `3-publish-manifest.sh` 只按白名单提交的原因 |
+| 某个项目 push 失败 | 单独重推。remote 会被恢复成 SSH |
+| LFS 相关报错 | 检查 `.gitattributes` 是否生成（强制 add） |
+
+---
+
+## 第 4 步 · 发布 manifest
+
+先 dry-run：
+
+```bash
+<SalvageOfSDK>/3-publish-manifest.sh \
+	--gitlab-url="http://<server>" \
+	--gitlab-group="<GROUP>" \
+	--gitlab-token="$GITLAB_TOKEN" \
+	--git-user-name="<name>" \
+	--git-user-email="<email>" \
+	--dry-run
+```
+
+确认无误后去掉 `--dry-run`，加 `--push`。
+
+**设计要点：** manifest 里 fetch 用 **SSH**（不存凭据），push 才用 HTTP+PAT。
+提交走**严格白名单**：只有 `default.xml` + `.gitignore`，防止日志里的 token 被带进去。
+
+---
+
+## 第 5 步 · 补空目录和权限位
+
+git 不存空目录，厂商包里有一批空目录是编译必需的。
+
+```bash
+<SalvageOfSDK>/5-fixtools/carry-extras.sh \
+	--repo-hook-dir="<path>/repo-hooks.git" \
+	--baseline-dir="<path>/<sdk>-readonly" \
+	--gitlab-url="http://<server>" \
+	--gitlab-group="<GROUP>" \
+	--git-user-name="<name>" \
+	--git-user-email="<email>" \
+	--gitlab-token="$GITLAB_TOKEN" \
+	--push
+```
+
+它把空目录和权限位记录下来，由 `post-sync.py` 作为 repo hook 在 sync 后回放。
+
+> hook 走**独立的 `repo-hooks.git`**，不放进 `manifests.git`。
+> hook 检出路径不能叫 `.repo-hooks` —— repo 会拒绝。
+
+**⚠️ 这一步的成果依赖客户端带 `--verify`。** 不带就停在 `(yes/always/NO)` 提问上，
+默认 NO，hook 不执行，空目录不出现，编译可能失败。
+
+---
+
+## 第 6 步 · 核对（6 项断言）
+
+拿一棵**真正 `repo sync` 出来的树**和只读基线比：
+
+```bash
+time <SalvageOfSDK>/4-verify-sync.sh \
+	--baseline-dir <path>/<sdk>-readonly \
+	--candidate-dir <path>/clone-<date> \
+	--work-dir ./verify-<date>
+```
+
+> 改 `4-verify-sync.sh` 需要评审。
+
+6 个 section 和典型失败：
+
+| # | 查什么 | 典型失败 |
+|---|---|---|
+| 1 | 项目集合 | — |
+| 2 | 文件清单 | 被 `.gitignore` 吞掉的源码 → 回第 2 步 |
+| 3 | — | — |
+| 4 | 符号链接 | 指向构建产物的链接被规则吞掉 |
+| 5 | 权限位 | umask 差异 |
+| 6 | 文件内容 | `.gitignore` 自身被我们改过（预期） |
+
+**候选独有**的 `.gitattributes` 是我们为 LFS 加的，**属于预期**，不是错误。
+
+### ⚠️ 卡住了
+
+| 症状 | 处置 |
+|---|---|
+| section 5 一堆权限差异 | umask 造成。按「能编译即可」的底线，可接受 |
+| section 2 有 PLAIN（非 ignored）的缺失项 | 该项目的 `.gitignore` **自身也在缺失清单里**。用基线里的那份规则文件来归因 |
+| 核对的是错误的树 | 确认 `--candidate-dir` 是 `repo sync` 出来的，不是重建源 |
+| 有些目录 repo 从未管理过 | 用 `5-fixtools/adopt-dir.sh`，`cd` 到目标目录再跑 |
+
+---
+
+## 第 7 步 · 客户端验收
+
+在干净目录从零走一遍：
+
+```bash
+repo init -u ssh://git@<server>:<GROUP>/manifests.git -b main --no-clone-bundle
+repo sync -j8 --verify                    # --verify 才会执行 post-sync hook（第 5 步的空目录）
+repo forall -c 'git lfs pull' -j4         # ★ 必须这步，否则大文件只是 LFS 指针
+```
+
+**三条命令缺一不可。** 然后检查：
+
+```bash
+repo list | wc -l    # 项目数对得上
+du -sh .             # 明显偏小（如只有 17G/28G）说明 lfs pull 没跑
+ls -l <顶层应有的符号链接>
+./build.sh all       # 终极验收：能编译出固件
+```
+
+---
+
+## 收尾清单
+
+- [ ] revoke 本次用的 PAT
+- [ ] 检查所有 `.git/config` 无明文凭据：
+      `find <tree> -name config -path '*/.git/*' | xargs grep -l '://[^:/@]*:[^@]*@'`
+- [ ] 笔记/文档里的 token 换成变量
+- [ ] 构建日志不要提交
+- [ ] `SalvageOfSDK.git` 推送
