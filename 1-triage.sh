@@ -246,6 +246,11 @@ main() {
             ;;
     esac
 
+    # Built-in stopwatch (libs/utils.sh): the operator keeps forgetting `time`.
+    # No other EXIT trap exists in this script, so a plain install is safe.
+    libutils_clock_start
+    trap libutils_clock_report EXIT
+
     func_1_2_check_options "$@"
     func_1_3_init_paths
     func_1_4_init_sdk_root "$@"

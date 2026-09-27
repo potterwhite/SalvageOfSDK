@@ -385,8 +385,11 @@ func_publish(){
     libgitlab_ensure_project "${GITLAB_URL}" "${GITLAB_GROUP}" \
         "${MANIFEST_PROJECT}" "${GITLAB_TOKEN}" "${VISIBILITY}"
 
-    libgitlab_push "${GITLAB_URL}" "${GITLAB_GROUP}" \
-        "${MANIFEST_PROJECT}" "${GITLAB_TOKEN}" "${DEFAULT_BRANCH}"
+    # Subshell: libgitlab_push replaces the EXIT trap for the duration of the
+    # push (token scrub). Run bare here it would evict main's stopwatch trap;
+    # in a subshell its trap lives and dies with the subshell.
+    ( libgitlab_push "${GITLAB_URL}" "${GITLAB_GROUP}" \
+        "${MANIFEST_PROJECT}" "${GITLAB_TOKEN}" "${DEFAULT_BRANCH}" )
 
     libgitlab_verify_push "${GITLAB_URL}" "${GITLAB_GROUP}" \
         "${MANIFEST_PROJECT}" "${GITLAB_TOKEN}" "${DEFAULT_BRANCH}" "$(libgitrepo_head)"
@@ -437,6 +440,10 @@ main(){
             exit 0
             ;;
     esac
+
+    # Built-in stopwatch (libs/utils.sh): the operator keeps forgetting `time`.
+    libutils_clock_start
+    trap libutils_clock_report EXIT
 
     func_1_2_check_options "$@"
     func_1_3_init_paths

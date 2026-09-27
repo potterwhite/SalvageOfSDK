@@ -607,6 +607,12 @@ main() {
             ;;
     esac
 
+    # Built-in stopwatch (libs/utils.sh): the operator keeps forgetting `time`.
+    # libgitlab_push's EXIT trap runs inside func_push_one's SUBSHELL, so it
+    # never touches this one.
+    libutils_clock_start
+    trap libutils_clock_report EXIT
+
     echo "Starting the rebuild process..."
 
     func_1_2_check_options "$@"

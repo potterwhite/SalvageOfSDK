@@ -50,6 +50,44 @@ libutils_die() {
 }
 
 # ---------------------------------------------------------------------------
+# Elapsed-time clock
+# ---------------------------------------------------------------------------
+
+# libutils_clock_start: begin measuring wall-clock time for this run.
+#
+# Call once near the top of main, AFTER --help handling (a help print must not
+# report "ran for 0 seconds"), and arrange for libutils_clock_report to run
+# from the script's EXIT trap. The operator keeps forgetting to type `time`,
+# and these runs are long -- a full push is hours -- so the measurement lives
+# in the scripts themselves.
+libutils_clock_start() {
+    LIBUTILS_CLOCK_T0=$SECONDS
+}
+
+# libutils_clock_report: print elapsed time since libutils_clock_start.
+#
+# stderr, like libutils_say. A no-op when the clock was never started, so a
+# trap firing before the start line cannot print nonsense. The variable is
+# unset afterwards: an EXIT trap plus an explicit call at the end of main
+# would otherwise print the line twice.
+#
+# Note for trap composition: this function is safe to call from another trap
+# handler (e.g. a cleanup trap), which is how scripts that already own the
+# EXIT trap add the clock without clobbering their cleanup.
+libutils_clock_report() {
+    [ -n "${LIBUTILS_CLOCK_T0:-}" ] || return 0
+
+    local s=$((SECONDS - LIBUTILS_CLOCK_T0))
+    unset LIBUTILS_CLOCK_T0
+
+    if [ "$s" -ge 3600 ]; then
+        printf '==> 总耗时 %d小时%d分%d秒\n' $((s / 3600)) $((s % 3600 / 60)) $((s % 60)) >&2
+    else
+        printf '==> 总耗时 %d分%d秒\n' $((s / 60)) $((s % 60)) >&2
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Preconditions
 # ---------------------------------------------------------------------------
 

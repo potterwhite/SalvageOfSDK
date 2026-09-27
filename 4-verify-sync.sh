@@ -282,6 +282,10 @@ func_1_4_cleanup(){
     case "$WORK_DIR" in
         */verify-sync.??????) rm -rf "$WORK_DIR" ;;
     esac
+
+    # This trap replaced the stopwatch trap main installed, so reporting the
+    # clock is this handler's job now.
+    libutils_clock_report
 }
 
 # ============================================================================
@@ -783,6 +787,13 @@ main(){
             exit 0
             ;;
     esac
+
+    # Built-in stopwatch (libs/utils.sh): the operator keeps forgetting `time`.
+    # func_1_4_init_paths later REPLACES this trap with its cleanup trap (one
+    # handler per signal), so func_1_4_cleanup calls libutils_clock_report
+    # itself and nothing is lost on either path.
+    libutils_clock_start
+    trap libutils_clock_report EXIT
 
     func_1_2_check_options "$@"
     func_1_3_init_trees "$@"
