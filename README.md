@@ -15,23 +15,22 @@
 ```
 阶段一 · 准备与判定（一次）
   第 1 步   解包 → 锁死基线 → 复制重建树
-  第 2 步   判定形态：每个项目的历史还在不在（判据见第二章）
+  第 2 步   判定形态 + 生成项目清单（1-triage.sh；判据见第二章）
             ├─ 全部没有历史 → 阶段二（本流程的主线）
             ├─ 全部有历史   → 附录 D（整体搬迁）
             └─ 一部分有     → 两类分治：有历史的按附录 D，没有的按阶段二
 
-阶段二 · 快照重建：对账循环（第 4~7 步反复跑，整个流程 90% 的时间在这里）
-  第 3 步   生成项目清单 subprojects.txt（只做一次）
-  第 4 步   重建并推送（2-rebuild.sh）
-  第 5 步   发布 manifest（3-publish-manifest.sh）
-  第 6 步   同步一棵候选树（repo sync）
-  第 7 步   对账 → 修 .gitignore → 回到第 4 步
+阶段二 · 快照重建：对账循环（第 3~6 步反复跑，整个流程 90% 的时间在这里）
+  第 3 步   重建并推送（2-rebuild.sh）
+  第 4 步   发布 manifest（3-publish-manifest.sh）
+  第 5 步   同步一棵候选树（repo sync）
+  第 6 步   对账 → 修 .gitignore → 回到第 3 步
             循环出口：缺的文件全是「能编译出来的东西」
 
 阶段三 · 交付（循环收敛后，只走一遍）
-  第 8 步   补空目录和权限位（carry-extras.sh）
-  第 9 步   最终核对（4-verify-sync.sh 全量）
-  第 10 步  客户端从零验收（repo 三连 + 编译）
+  第 7 步   补空目录和权限位（carry-extras.sh）
+  第 8 步   最终核对（4-verify-sync.sh 全量）
+  第 9 步   客户端从零验收（repo 三连 + 编译）
 ```
 
 **为什么阶段二是个循环？** `git add` 会按项目里残留的 `.gitignore` 规则**静默**丢文件——不报错，磁盘上文件也还在原地，只有从 git 重新拉下来的树里才看得出缺了什么。所以必须「试跑 → 拉下来对账 → 修规则 → 再试跑」。原理和一个 30 秒的小实验见[附录 A](#附录-a-为什么-gitignore-会吞源码30-秒实验)。
@@ -87,46 +86,36 @@ find <path>/<sdk>-readonly -writable | wc -l     # 必须是 0
 > 变了说明基线被碰过，重新解包。rk3576 的 tarball 是 0（全树没有 `.git`），
 > rk3588-android12 是 1084，两种都正常。
 
-### 第 2 步 · 判定形态
+### 第 2 步 · 判定形态 + 生成项目清单
 
-**干什么**：按第二章的判据，给每个项目打「有历史 / 无历史」的标签，汇总出全树的命运，决定后面走哪条路。
-
-**怎么做**（判定脚本 `1-triage.sh` 规划中，当前用第二章 2.3 的手工命令，判据相同）：
-
-```bash
-# 粗筛：全树有没有活着的历史数据（-L 跟随符号链接，不加活链接会漏判）
-find -L <path>/<sdk>-readonly -path '*/.git/objects' -type d
-```
-
-1. 结果 = 0 → 全树无历史，走阶段二，第 3 步见。
-2. 结果 > 0 → 有候选项目，逐项目细判：`git -C <项目> log -1`，能打出提交的才算真有历史（排除空壳，见第二章）。全部有历史 → 附录 D；一部分有 → 附录 D 和阶段二各管一类。
-
-**怎么算完**：你能说出这棵树是三种命运里的哪一种，并且有依据。
-
----
-
-### 第 3 步 · 生成项目清单（只做一次）
-
-**干什么**：告诉 `2-rebuild.sh` 哪些目录是独立项目（每个项目 = 一个 GitLab 仓库）。
-
-**为什么手工生成**：脚本的自动扫描只认「`.git` 是符号链接」的形态（rk3576 是那种）。rk3588 的 `.git` 是骨架目录，自动扫描会漏掉几乎全部。脚本约定：`subprojects.txt` 已存在就跳过扫描直接复用——所以手工生成即可，不用改脚本。
+**干什么**：按第二章的判据，给每个项目打「有历史 / 无历史」的标签，汇总出全树的命运；同时生成 `2-rebuild.sh` 要读的项目清单。
 
 ```bash
 cd <path>/salvage-work
-find <path>/<sdk>-rebuild -name .git \( -type l -o -type d \) \
-    -exec bash -c 'realpath "$(dirname "{}")"' \; | sort > subprojects.txt
-wc -l subprojects.txt     # 必须等于第 1 步记下的数（1084）
-head -3 subprojects.txt   # 抽查：路径必须指向 rebuild 树，不能是 readonly
+<SalvageOfSDK>/1-triage.sh <path>/<sdk>-rebuild
 ```
+
+> 对**重建树**跑，不是基线。脚本是纯只读的，但它产出的清单路径要给第 3 步用，必须指向 rebuild。
+
+**产出两个文件**（都在 salvage-work 里）：
+
+| 文件 | 内容 |
+|---|---|
+| `triage.txt` | 每个项目一行：`路径 <TAB> history/no-history <TAB> 原因` |
+| `subprojects.txt` | 无历史项目的清单，`2-rebuild.sh` 只读这个文件 |
+
+**怎么算完**：尾部摘要说出全树命运，并且 `wc -l subprojects.txt` = 第 1 步记下的数（rk3588-android12 = 1084）。命运是「全部无历史」→ 第 3 步；「全部有历史」→ 附录 D；「混合」→ 附录 D 和第 3 步各管一类。
 
 **⚠️ 卡住了**
 
 | 症状 | 处置 |
 |---|---|
-| 清单行数和第 1 步记的数对不上 | find 的起点指错了树，或树被碰过。先复核 readonly 的 `.git` 计数 |
-| 清单里出现 readonly 的路径 | 删掉重生成。第 4 步会对这些路径 `rm -rf .git`，指错树会撞在只读锁上 |
+| 摘要显示「共 0 个项目」 | 这棵树全树没有 `.git`（rk3576 形态）。无历史可救，但项目边界要手工划定后写入 `subprojects.txt`：`find <path>/<sdk>-rebuild -name .git \( -type l -o -type d \) -exec bash -c 'realpath "$(dirname "{}")"' \; \| sort > subprojects.txt`，或按你对树的了解手工列出 |
+| 清单行数和第 1 步记的数对不上 | 参数指错了树，或树被碰过。先复核 readonly 的 `.git` 计数 |
 
-### 第 4 步 · 重建并推送
+---
+
+### 第 3 步 · 重建并推送
 
 **干什么**：对清单里每个项目 `git init + add + commit`，在 GitLab 建仓库并 push，最后生成 `default.xml`。
 
@@ -146,7 +135,7 @@ read -s GITLAB_TOKEN     # PAT 输进环境变量，不进命令历史
 
 **重跑行为**（在循环里会反复用到，必读）：
 
-1. 已经是 git 仓库的项目 → **SKIP，不会重新 add**。改了某项目的 `.gitignore` 想让它生效：改的项目少走第 7 步的小环；改的项目多就 `rm -rf <rebuild>/<项目>/.git`（每个改过的项目）再重跑本步。
+1. 已经是 git 仓库的项目 → **SKIP，不会重新 add**。改了某项目的 `.gitignore` 想让它生效：改的项目少走第 6 步的小环；改的项目多就 `rm -rf <rebuild>/<项目>/.git`（每个改过的项目）再重跑本步。
 2. push 带 `-f`：覆盖的是自己上一轮推的内容，安全。
 3. 中断后原命令重跑即可：已完成的项目自动跳过，`default.xml` 从头重建，不会重复。
 
@@ -154,16 +143,16 @@ read -s GITLAB_TOKEN     # PAT 输进环境变量，不进命令历史
 
 | 症状 | 处置 |
 |---|---|
-| 日志里出现明文 token | git-lfs 会回显带凭据的 push URL。**日志不要提交**，第 5 步的白名单也防这个 |
+| 日志里出现明文 token | git-lfs 会回显带凭据的 push URL。**日志不要提交**，第 4 步的白名单也防这个 |
 | 某个项目 push 失败 | 网络抖动居多。原命令重跑，从断点继续 |
 | LFS 相关报错 | 确认 git-lfs 已装且过滤器已初始化（脚本启动时会查） |
 
-### 第 5 步 · 发布 manifest
+### 第 4 步 · 发布 manifest
 
 **干什么**：把第 4 步产出的 `default.xml` 发布成一个 git 仓库（默认名 manifests），客户端 `repo init` 拉的就是它。
 
 ```bash
-cd <path>/salvage-work     # 必须和第 4 步同一个目录，它读这里的 default.xml
+cd <path>/salvage-work     # 必须和第 3 步同一个目录，它读这里的 default.xml
 <SalvageOfSDK>/3-publish-manifest.sh \
     --gitlab-url="http://<server>" \
     --gitlab-group="<GROUP>" \
@@ -177,9 +166,9 @@ cd <path>/salvage-work     # 必须和第 4 步同一个目录，它读这里的
 
 它只提交 `default.xml` + `.gitignore`（严格白名单）——同目录的构建日志里有明文 token，绝不能进库。
 
-### 第 6 步 · 同步一棵候选树
+### 第 5 步 · 同步一棵候选树
 
-**干什么**：扮演客户端，把推上去的仓库拉成一棵完整的树，供第 7 步对账。
+**干什么**：扮演客户端，把推上去的仓库拉成一棵完整的树，供第 6 步对账。
 
 **为什么需要它**：重建树磁盘上的文件是「全」的——被 `.gitignore` 丢掉的文件也还躺在原地，在重建树上对账什么都看不出来。只有从 git 重新拉下来的树才会显形。
 
@@ -192,9 +181,9 @@ repo forall -c 'git lfs pull' -j4     # 不跑这步，大文件只是指针，�
 
 **怎么算完**：`repo list | wc -l` = 清单行数；`du -sh .` 和 rebuild 树同一量级。
 
-### 第 7 步 · 对账，修 .gitignore（循环核心）
+### 第 6 步 · 对账，修 .gitignore（循环核心）
 
-**干什么**：候选树 vs 只读基线，逐项比，缺什么修什么。修完回第 4 步，直到收敛。
+**干什么**：候选树 vs 只读基线，逐项比，缺什么修什么。修完回第 3 步，直到收敛。
 
 ```bash
 cd <path>/salvage-work
@@ -205,7 +194,7 @@ cd <path>/salvage-work
     --skip-content > verify-report.txt
 ```
 
-`--work-dir` 留下证据文件（缺文件清单就在里面）；`--skip-content` 只比「文件在不在」，秒级完成（逐字节比对留给第 9 步）。
+`--work-dir` 留下证据文件（缺文件清单就在里面）；`--skip-content` 只比「文件在不在」，秒级完成（逐字节比对留给第 8 步）。
 
 **看哪个文件**：`verify-*/entries-missing.diff`——基线有、候选没有的全部条目。每行格式 `类型<TAB>路径`，第 1 列 f=文件、d=目录。
 
@@ -231,7 +220,7 @@ cd <path>/clone-<date> && repo sync --force-sync <项目路径>
 # 然后重跑本步开头的对账
 ```
 
-改的项目多，或想全量确认（大环）：`rm -rf <rebuild>/<项目>/.git`（每个改过的项目），回到第 4 步。
+改的项目多，或想全量确认（大环）：`rm -rf <rebuild>/<项目>/.git`（每个改过的项目），回到第 3 步。
 
 **循环出口**：`entries-missing.diff` 里剩下的每一项，你都能说出「这是能编译出来的东西」。不是零，是只剩产物。
 
@@ -241,12 +230,12 @@ cd <path>/clone-<date> && repo sync --force-sync <项目路径>
 |---|---|
 | 想用 `git add -f` 绕过 | 不要。治不了根，下次重建又是一样。改 `.gitignore` 本身 |
 | 子目录的 `.gitignore` 写了 `!` 规则却不生效 | 死否定：父级规则已剪掉整个目录，git 不会递归进去读它。删父级规则（附录 B） |
-| 对账报告里全树都缺 | 八成是候选树没拉全：`repo sync` 的报错没注意，或 `lfs pull` 没跑。回第 6 步 |
+| 对账报告里全树都缺 | 八成是候选树没拉全：`repo sync` 的报错没注意，或 `lfs pull` 没跑。回第 5 步 |
 | `check-ignore` 报 `--non-matching is only valid with --verbose` | `-n` 必须配 `-v` |
 
 ---
 
-### 第 8 步 · 补空目录和权限位
+### 第 7 步 · 补空目录和权限位
 
 **干什么**：git 存不了空目录，权限也只存一个执行位。把空目录和完整权限位录成清单，由 repo hook 在每次 sync 后自动回放。
 
@@ -261,11 +250,11 @@ cd <path>/clone-<date> && repo sync --force-sync <项目路径>
     --gitlab-token="$GITLAB_TOKEN" --push
 ```
 
-跑完会打印**两行 XML，粘贴进 `salvage-work/default.xml`**，然后重跑一次第 5 步（把 hook 项目加进 manifest，重新发布）。
+跑完会打印**两行 XML，粘贴进 `salvage-work/default.xml`**，然后重跑一次第 4 步（把 hook 项目加进 manifest，重新发布）。
 
 > hook 的检出路径不能叫 `.repo-hooks`（repo 会拒绝），脚本已处理。
 
-### 第 9 步 · 最终核对
+### 第 8 步 · 最终核对
 
 候选树重新同步（这次带 `--verify`，hook 才会执行、空目录才会出现），然后全量对账：
 
@@ -286,7 +275,7 @@ cd <path>/salvage-work
 2. `.gitignore` 内容差异——我们改的
 3. umask 类权限差异——git 只存一个执行位，其余位由 umask 决定
 
-### 第 10 步 · 客户端验收
+### 第 9 步 · 客户端验收
 
 换一个干净目录（最好是另一台机器），完全按同事将来的用法从零走：
 
@@ -360,7 +349,7 @@ A  main.c
 
 | 脚本 | 干什么 | 碰不碰网络 |
 |---|---|---|
-| `1-triage.sh` | **规划中**。第二章判定流程的自动化：逐项目打标签、汇总全树命运、产出清单 | 否 |
+| `1-triage.sh` | 第二章判定流程的自动化：逐项目打标签、汇总全树命运，产出 `triage.txt` + `subprojects.txt`（纯只读） | 否 |
 | `2-rebuild.sh` | 逐子项目 `git init + add + commit`，建 GitLab 仓库，推送，生成 `default.xml` | 是 |
 | `3-publish-manifest.sh` | 把 `default.xml` 发布为 manifest 仓库 | 是 |
 | `4-verify-sync.sh` | 两棵树做 6 项断言的对账，纯只读 | 否 |
@@ -388,7 +377,7 @@ A  main.c
 **混合处理**（一部分项目有历史）：
 
 1. 有历史的项目：按上面搬迁走，**并从 `subprojects.txt` 里剔除**（别让 `2-rebuild.sh` 碰它们）。
-2. 没历史的项目：走第 3~7 步的快照重建循环。
+2. 没历史的项目：走第 3~6 步的快照重建循环。
 3. 两类项目进同一个 manifest，一起发布。
 
 > 这条路径目前没有专用脚本（手上还没有真实样例树）。遇到时按本节的步骤手工执行，
