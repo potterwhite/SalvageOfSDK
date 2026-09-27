@@ -436,7 +436,7 @@ func_init_one(){
     git init
     # git init -b 是 2.28 才有的；空仓库上 checkout -b 等价：未出生的分支
     # 直接改名，第一个 commit 落在 ${DEFAULT_BRANCH} 上（ubuntu 20.04 自带 2.25）
-    git checkout -q -b "${DEFAULT_BRANCH}"
+    git checkout -b "${DEFAULT_BRANCH}"
     git config user.name "${GIT_USER_NAME}"
     git config user.email "${GIT_USER_EMAIL}"
 
@@ -446,7 +446,18 @@ func_init_one(){
     libgitrepo_setup_lfs "${LFS_MIN_MB}"
 
     git add .
-    git commit -m "${GIT_COMMIT_MSG}"
+
+    # A project the vendor shipped empty (this tree has 6, e.g.
+    # device/generic/qemu), or one whose every file was swallowed by
+    # .gitignore, leaves the index empty and a plain commit would die and
+    # kill the whole batch. --allow-empty lets it stand as an empty commit
+    # so the project stays in the manifest; a truly-empty project matches
+    # the baseline at verify time, and a swallowed non-empty one is exactly
+    # what the reconciliation loop exists to catch.
+    if git diff --cached --quiet; then
+        echo "WARN: git add 一个文件都没收下（空目录或全部被 .gitignore 吞掉）——建空提交占位"
+    fi
+    git commit -m "${GIT_COMMIT_MSG}" --allow-empty
 }
 
 # func_push_one: create the GitLab project for ONE subproject and push it.

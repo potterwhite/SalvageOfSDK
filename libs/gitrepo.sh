@@ -151,10 +151,10 @@ libgitrepo_init() {
         libutils_say "reusing existing .git (this is a re-run)"
     else
         libutils_say "git init (branch $branch)"
-        git init -q
+        git init
         # git init -b needs git 2.28; checkout -b on an unborn HEAD is the
         # same thing and works on the 2.25 that ubuntu 20.04 ships.
-        git checkout -q -b "$branch"
+        git checkout -b "$branch"
     fi
 
     grep -qxF "$LIBGITREPO_EVIDENCE_FILE" .git/info/exclude 2>/dev/null \

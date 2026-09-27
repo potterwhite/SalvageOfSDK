@@ -108,10 +108,10 @@ cd <path>/salvage-work
 
 **⚠️ 卡住了**
 
-| 症状 | 处置 |
-|---|---|
-| 摘要显示「共 0 个项目」 | 这棵树全树没有 `.git`（rk3576 形态）。无历史可救，但项目边界要手工划定后写入 `subprojects.txt`：`find <path>/<sdk>-rebuild -name .git \( -type l -o -type d \) -exec bash -c 'realpath "$(dirname "{}")"' \; \| sort > subprojects.txt`，或按你对树的了解手工列出 |
-| 清单行数和第 1 步记的数对不上 | 参数指错了树，或树被碰过。先复核 readonly 的 `.git` 计数 |
+| # | 症状 | 处置 |
+|---|---|---|
+| 1 | 摘要显示「共 0 个项目」 | 这棵树全树没有 `.git`（rk3576 形态）。无历史可救，但项目边界要手工划定后写入 `subprojects.txt`：`find <path>/<sdk>-rebuild -name .git \( -type l -o -type d \) -exec bash -c 'realpath "$(dirname "{}")"' \; \| sort > subprojects.txt`，或按你对树的了解手工列出 |
+| 2 | 清单行数和第 1 步记的数对不上 | 参数指错了树，或树被碰过。先复核 readonly 的 `.git` 计数 |
 
 ---
 
@@ -141,11 +141,13 @@ read -s GITLAB_TOKEN     # PAT 输进环境变量，不进命令历史
 
 **⚠️ 卡住了**
 
-| 症状 | 处置 |
-|---|---|
-| 日志里出现明文 token | git-lfs 会回显带凭据的 push URL。**日志不要提交**，第 4 步的白名单也防这个 |
-| 某个项目 push 失败 | 网络抖动居多。原命令重跑，从断点继续 |
-| LFS 相关报错 | 确认 git-lfs 已装且过滤器已初始化（脚本启动时会查） |
+| # | 症状 | 处置 |
+|---|---|---|
+| 1 | 日志里出现明文 token | git-lfs 会回显带凭据的 push URL。**日志不要提交**，第 4 步的白名单也防这个 |
+| 2 | 某个项目 push 失败 | 网络抖动居多。原命令重跑，从断点继续 |
+| 3 | LFS 相关报错 | 确认 git-lfs 已装且过滤器已初始化（脚本启动时会查） |
+| 4 | `WARN: git add 一个文件都没收下……建空提交占位` | 该项目是厂商发货的空目录（rk3588 有 6 个，如 `device/generic/qemu`），属**预期**。若出现在本该有文件的项目上，说明文件全被 `.gitignore` 吞了——不用现在处理，第 6 步对账会抓出来 |
+| 5 | 报错 `unknown switch 'b'` 或 `git init` 用法 | git 版本低于 2.28（如 ubuntu 20.04 自带 2.25）。脚本已兼容，看到此错说明用的是旧版脚本，更新 SalvageOfSDK |
 
 ### 第 4 步 · 发布 manifest
 
@@ -226,12 +228,12 @@ cd <path>/clone-<date> && repo sync --force-sync <项目路径>
 
 **⚠️ 卡住了**
 
-| 症状 | 处置 |
-|---|---|
-| 想用 `git add -f` 绕过 | 不要。治不了根，下次重建又是一样。改 `.gitignore` 本身 |
-| 子目录的 `.gitignore` 写了 `!` 规则却不生效 | 死否定：父级规则已剪掉整个目录，git 不会递归进去读它。删父级规则（附录 B） |
-| 对账报告里全树都缺 | 八成是候选树没拉全：`repo sync` 的报错没注意，或 `lfs pull` 没跑。回第 5 步 |
-| `check-ignore` 报 `--non-matching is only valid with --verbose` | `-n` 必须配 `-v` |
+| # | 症状 | 处置 |
+|---|---|---|
+| 1 | 想用 `git add -f` 绕过 | 不要。治不了根，下次重建又是一样。改 `.gitignore` 本身 |
+| 2 | 子目录的 `.gitignore` 写了 `!` 规则却不生效 | 死否定：父级规则已剪掉整个目录，git 不会递归进去读它。删父级规则（附录 B） |
+| 3 | 对账报告里全树都缺 | 八成是候选树没拉全：`repo sync` 的报错没注意，或 `lfs pull` 没跑。回第 5 步 |
+| 4 | `check-ignore` 报 `--non-matching is only valid with --verbose` | `-n` 必须配 `-v` |
 
 ---
 
@@ -339,11 +341,11 @@ A  main.c
 
 **技巧与坑**：
 
-| 情况 | 处置 |
-|---|---|
-| 子目录有 `.gitignore` 写了 `!*.sh` 却不生效 | 死否定：父级规则已剪掉整个目录，git 不会递归进去读它。删父级规则 |
-| 项目里有大量无扩展名的可执行产物 | 黑名单挡不住（例：mpp 约 48 个 `*_test`）。用白名单 |
-| 用 `entries-missing.diff` 过滤 | 格式是 `类型<TAB>路径`，路径不带尾斜杠。按文件过滤必须 `awk -F'\t' '$1=="f"'`，不能 `grep -v '/'` |
+| # | 情况 | 处置 |
+|---|---|---|
+| 1 | 子目录有 `.gitignore` 写了 `!*.sh` 却不生效 | 死否定：父级规则已剪掉整个目录，git 不会递归进去读它。删父级规则 |
+| 2 | 项目里有大量无扩展名的可执行产物 | 黑名单挡不住（例：mpp 约 48 个 `*_test`）。用白名单 |
+| 3 | 用 `entries-missing.diff` 过滤 | 格式是 `类型<TAB>路径`，路径不带尾斜杠。按文件过滤必须 `awk -F'\t' '$1=="f"'`，不能 `grep -v '/'` |
 
 ### 附录 C · 工具清单
 
