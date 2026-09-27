@@ -280,7 +280,7 @@ func_1_7_init_lfs_config(){
 # git-lfs binary whose filters were never installed passes `command -v` and
 # then fails at `git lfs track`.
 func_1_8_check_deps(){
-    libutils_require_cmd git curl realpath find
+    libutils_require_cmd git curl realpath find python3
     libgitrepo_require_lfs
 }
 
@@ -465,33 +465,28 @@ func_init_one(){
 # $1 -- absolute path to the subproject
 # $2 -- its repository name
 #
-# Expects AUTH_URL from func_prepare_auth.
+# All server contact goes through libs/gitlab.sh. The inline curl this used to
+# be had two defects that only surface at push time: the group-id lookup did
+# not URL-encode the group path, so a NESTED group ("team/sdk-name") 404'd and
+# the empty namespace_id made GitLab create every project in the operator's
+# PERSONAL namespace without a word; and the PAT stayed in .git/config after
+# the push, violating the never-on-disk rule. libgitlab_ensure_project dies on
+# API failure instead, and libgitlab_push keeps the token on disk only for the
+# duration of the push (its EXIT trap scrubs even on Ctrl-C) and leaves origin
+# at the credential-free SSH URL.
 func_push_one(){
     local abs_path="$1" repo_name="$2"
 
     echo "=================================================="
-    echo "Pushing: $abs_path -> Remote: $repo_name"
+    echo "Pushing: $abs_path -> Remote: ${GITLAB_GROUP}/${repo_name}"
     echo "=================================================="
 
-    # 1. API 建库
-    curl --silent --request POST "${GITLAB_URL}/api/v4/projects" \
-        --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
-        --data "name=${repo_name}&path=${repo_name}&namespace_id=$(curl --silent --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" "${GITLAB_URL}/api/v4/groups/${GITLAB_GROUP}" | grep -o '"id":[0-9]*' | head -1 | awk -F: '{print $2}')&visibility=private" > /dev/null || true
+    # 1. API 建库（已存在则跳过）
+    libgitlab_ensure_project "${GITLAB_URL}" "${GITLAB_GROUP}" "${repo_name}" "${GITLAB_TOKEN}" private
 
-    # 2. Push 代码
-    cd "$abs_path"
-    git remote remove origin 2>/dev/null || true
-    git remote add origin "${AUTH_URL}/${GITLAB_GROUP}/${repo_name}.git"
-    git push -u origin "${DEFAULT_BRANCH}" -f
-}
-
-# func_prepare_auth: build the authenticated push URL, once per run.
-func_prepare_auth(){
-    if [ -z "${GITLAB_TOKEN}" ]; then
-        libutils_die "--push needs --gitlab-token (api scope)"
-    fi
-
-    AUTH_URL=$(echo "${GITLAB_URL}" | sed -E "s#(https?://)#\1oauth2:${GITLAB_TOKEN}@#")
+    # 2. Push 代码。force：对账小环 amend 之后重推是正常操作。
+    #    子 shell 包住 cd，本循环的工作目录不被带走。
+    ( cd "$abs_path" && libgitlab_push "${GITLAB_URL}" "${GITLAB_GROUP}" "${repo_name}" "${GITLAB_TOKEN}" "${DEFAULT_BRANCH}" force )
 }
 
 # ============================================================================
@@ -528,7 +523,7 @@ func_process_all(){
         "${DEFAULT_BRANCH}"
 
     if [ "${DO_PUSH}" = yes ]; then
-        func_prepare_auth
+        [ -n "${GITLAB_TOKEN}" ] || libutils_die "--push needs --gitlab-token (api scope)"
     fi
 
     while IFS= read -r abs_path; do

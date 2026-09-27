@@ -98,35 +98,33 @@ libgitlab_auth_url() {
 # libgitlab_group_id: print the numeric id of a group, or nothing if absent.
 #
 # $1 -- base URL
-# $2 -- group path
+# $2 -- group path, nested or not ("team" and "team/sub" both work)
 # $3 -- PAT
 #
-# The search endpoint does substring matching, so searching "team_rk3576" can
-# also return "team_rk3576_old". We take an exact path match when one exists
-# and only fall back to the first result otherwise -- pushing into the wrong
-# namespace is the kind of mistake that is tedious to undo.
+# Looks the group up by its URL-encoded FULL path, not ?search=. The search
+# endpoint does substring matching on single path segments: it cannot express
+# "team/sub" at all, and for a flat name "team_rk3576" it can also return
+# "team_rk3576_old". The direct route is exact by construction. This matters
+# because a dedicated per-SDK subgroup is how the whole fleet gets retired in
+# one delete later -- pushing into the wrong namespace defeats that.
 libgitlab_group_id() {
-    local url="$1" group="$2" token="$3" json
+    local url="$1" group="$2" token="$3" body code
 
-    json=$(curl -sf -H "PRIVATE-TOKEN: $token" \
-             "$url/api/v4/groups?search=$group") \
-        || libutils_die "cannot reach GitLab API at $url (check the token and the network)"
+    # -w appends the status to stdout, so no second request is needed to tell
+    # "no such group" apart from "cannot talk to the server". curl exits
+    # non-zero only when no HTTP exchange happened at all.
+    body=$(curl -s -w '\n%{http_code}' -H "PRIVATE-TOKEN: $token" \
+             "$url/api/v4/groups/${group//\//%2F}") \
+        || libutils_die "cannot reach GitLab API at $url (check the network)"
 
-    # The group name is passed as an argument, not as an environment variable.
-    # A "VAR=x cmd | other" prefix applies only to the left-hand command, so
-    # the variable would never reach python3 at all.
-    echo "$json" | python3 -c '
-import json, sys
+    code=${body##*$'\n'}
+    case "$code" in
+        200) ;;
+        404) return 0 ;; # no such group: print nothing, per the contract
+        *) libutils_die "GitLab API answered HTTP $code for group '$group' (check the token)" ;;
+    esac
 
-groups = json.load(sys.stdin)
-wanted = sys.argv[1]
-
-# Prefer an exact match on either path or full_path, so a nested group given
-# as "team/sub" resolves correctly too.
-exact = [g for g in groups if wanted in (g.get("path"), g.get("full_path"))]
-chosen = exact or groups
-print(chosen[0]["id"] if chosen else "")
-' "$group"
+    echo "${body%$'\n'*}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])'
 }
 
 # libgitlab_project_exists: return 0 if group/name already exists on the server.
@@ -136,16 +134,16 @@ print(chosen[0]["id"] if chosen else "")
 # $3 -- project name
 # $4 -- PAT
 #
-# The project endpoint addresses a project by URL-encoded "group/name", so the
-# '/' must be written as %2F or the request lands on a different route. Done by
-# string substitution rather than a URL-encoding library because group and
-# project paths are restricted by GitLab to characters that need no other
-# escaping.
+# The project endpoint addresses a project by URL-encoded "group/name", so
+# EVERY '/' in that id must be written as %2F -- including any inside a nested
+# group path -- or the request lands on a different route. Done by string
+# substitution rather than a URL-encoding library because group and project
+# paths are restricted by GitLab to characters that need no other escaping.
 libgitlab_project_exists() {
     local url="$1" group="$2" name="$3" token="$4"
 
     curl -sf -o /dev/null -H "PRIVATE-TOKEN: $token" \
-        "$url/api/v4/projects/$group%2F$name"
+        "$url/api/v4/projects/${group//\//%2F}%2F$name"
 }
 
 # libgitlab_ensure_project: make sure group/name exists, creating it if needed.
@@ -229,6 +227,9 @@ libgitlab_setup_remote() {
 # $3 -- project name
 # $4 -- PAT
 # $5 -- branch name
+# $6 -- optional: the word "force". A re-run after an amended commit (the
+#      reconciliation loop's small ring) must be allowed to replace what an
+#      earlier run pushed, and force is how.
 #
 # The EXIT trap guarantees the scrub even if the push fails or the operator
 # interrupts with Ctrl-C. Without it, an aborted run leaves a plaintext PAT in
@@ -245,7 +246,7 @@ libgitlab_setup_remote() {
 # The remote is removed and re-added rather than updated, so a re-run cannot
 # inherit a stale URL from a previous attempt against a different server.
 libgitlab_push() {
-    local url="$1" group="$2" name="$3" token="$4" branch="$5"
+    local url="$1" group="$2" name="$3" token="$4" branch="$5" force="${6:-}"
 
     # Expanded now, not at trap time: a trap body runs after the function's
     # locals are gone.
@@ -256,7 +257,13 @@ libgitlab_push() {
     git remote add origin "$(libgitlab_auth_url "$url" "$group" "$name" "$token")"
 
     libutils_say "pushing $branch to $(libgitlab_repo_url "$url" "$group" "$name")"
-    git push -q -u origin "$branch"
+    # No -q: across a thousand-project run the progress lines are the only
+    # sign of life the operator gets.
+    if [ "$force" = force ]; then
+        git push -u origin "$branch" -f
+    else
+        git push -u origin "$branch"
+    fi
 
     # Done here as well as in the trap, so the state a caller's verify step
     # inspects is the final one rather than whatever the trap will make of it.
