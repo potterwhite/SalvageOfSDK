@@ -433,7 +433,10 @@ func_init_one(){
     cd "$abs_path"
 
     rm -rf .git # 删除原来的旧/错软链接
-    git init -b "${DEFAULT_BRANCH}"
+    git init
+    # git init -b 是 2.28 才有的；空仓库上 checkout -b 等价：未出生的分支
+    # 直接改名，第一个 commit 落在 ${DEFAULT_BRANCH} 上（ubuntu 20.04 自带 2.25）
+    git checkout -q -b "${DEFAULT_BRANCH}"
     git config user.name "${GIT_USER_NAME}"
     git config user.email "${GIT_USER_EMAIL}"
 
