@@ -100,6 +100,8 @@ Required unless --dry-run:
 Options:
   --dry-run              Survey the directory and exit. Creates nothing, needs
                          no credentials, touches no server. Use it first.
+  --project-name=NAME    GitLab project name (default: auto-derived from dir path;
+                         leading '.' is auto-replaced by 'dot-')
   --sdk-root=DIR         The SDK root that path= is computed against.
                          default: the directory --dir sits in
                          Give it when adopting something nested, so that
@@ -166,7 +168,7 @@ EOF
 func_1_2_check_options(){
     OPTION_NAMES="dir sdk-root gitlab-url gitlab-group gitlab-token \
 git-user-name git-user-email branch remote lfs-min-mb commit-msg visibility push \
-dry-run help"
+dry-run help project-name"
 
     libargs_check_known "$OPTION_NAMES" "$@"
 }
@@ -218,11 +220,35 @@ func_1_3_init_dir(){
 
     REL="${DIR#"${SDK_ROOT}"/}"
 
-    # The same rule 2-rebuild.sh uses. It must be the same: two tools that
-    # disagree about naming produce a manifest whose lines point at repositories
-    # nobody pushed. Slashes fold to dashes because GitLab projects live in one
-    # flat group while the layout is carried by the manifest's path=.
-    REPO_NAME=$(echo "$REL" | tr '/' '-')
+    # -----------------------------------
+    # Modified: Sep28.2026
+    # Author: PotterWhite
+    # Function: Support specified project-name by this option
+    local custom_name
+    custom_name=$(libargs_get project-name "" "$@")
+
+    if [ -n "$custom_name" ]; then
+        REPO_NAME="$custom_name"
+    else
+	# The same rule 2-rebuild.sh uses. It must be the same: two tools that
+	# disagree about naming produce a manifest whose lines point at repositories
+	# nobody pushed. Slashes fold to dashes because GitLab projects live in one
+	# flat group while the layout is carried by the manifest's path=.
+        REPO_NAME=$(echo "$REL" | tr '/' '-')
+
+	# special project-name cases handler
+        case "$REPO_NAME" in
+            .*)
+                REPO_NAME="dot-${REPO_NAME#.}"
+                ;;
+            [-_]*)
+                REPO_NAME="repo${REPO_NAME}"
+                ;;
+        esac
+	echo "REPO_NAME=${REPO_NAME}"
+    fi
+    # -----------------------------------
+
 }
 
 # ============================================================================
