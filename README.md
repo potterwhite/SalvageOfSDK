@@ -42,7 +42,7 @@
 | 磁盘 | 原始包 + 重建树 + 候选树。单棵树 20~70G，至少留 3 棵的空间（AOSP 级别 250G+） |
 | 内网 GitLab | 你有建组权限。给每套 SDK 建一个**专属子组**，名字写全（如 `team_n8/rk3588-android12`，别缩写）：上千个仓库全在里面，将来整套退役时删这个子组就一次删净，且绝不会碰到组外项目 |
 | GitLab PAT | api 权限。**永不落盘**：每次用之前 `read -s GITLAB_TOKEN` 输进环境变量 |
-| repo 工具 + SSH key | 第 6 步起需要。拉取用 SSH，key 要提前在 GitLab 配好 |
+| repo 工具 + SSH key | 第 5 步起需要。repo 安装见第 5 步开头。拉取全程走 SSH（manifest 里的 fetch 地址就是 `ssh://`），key 要提前在 GitLab 网页（Preferences → SSH Keys）配好，并用 `ssh -T git@<server>` 验证看到 Welcome |
 
 **目录约定**（后面所有命令都用这四个名字）：
 
@@ -174,7 +174,18 @@ cd <path>/salvage-work     # 必须和第 3 步同一个目录，它读这里的
 
 **为什么需要它**：重建树磁盘上的文件是「全」的——被 `.gitignore` 丢掉的文件也还躺在原地，在重建树上对账什么都看不出来。只有从 git 重新拉下来的树才会显形。
 
+**repo 工具怎么装**（AOSP 标准做法：单个启动器放 `~/bin`。官方下载源够不到，用内网 GitLab 上 `REPO_URL` 指向的那份 git-repo）：
+
 ```bash
+git clone ssh://git@<server>/team_tools/git-repo.git ~/git-repo
+mkdir -p ~/bin && cp ~/git-repo/repo ~/bin/repo && chmod a+x ~/bin/repo
+# Ubuntu 的 ~/.profile 登录时会自动把 ~/bin 加进 PATH；当前终端先手动：
+export PATH="$HOME/bin:$PATH"
+repo --version
+```
+
+```bash
+export REPO_URL=ssh://git@<server>/team_tools/git-repo.git   # repo 工具自身也从内网更新
 mkdir <path>/clone-$(date +%m%d) && cd <path>/clone-$(date +%m%d)
 repo init -u ssh://git@<server>/<GROUP>/manifests.git -b main --no-clone-bundle
 repo sync -j8
