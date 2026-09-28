@@ -189,6 +189,9 @@ export REPO_URL=ssh://git@<server>/team_tools/git-repo.git   # repo 工具自身
 mkdir <path>/clone-$(date +%m%d) && cd <path>/clone-$(date +%m%d)
 repo init -u ssh://git@<server>/<GROUP>/manifests.git -b main --no-clone-bundle
 repo sync -j8
+# forall 把每个项目的输出攒到它跑完才打印，大项目多时全程沉默——不是卡死。
+# GIT_LFS_PROGRESS 让 git-lfs 把实时进度写进文件：另开终端 tail -f 该文件即可看到进度。
+export GIT_LFS_PROGRESS=$HOME/lfs-progress.log
 repo forall -c 'git lfs pull' -j4     # 不跑这步，大文件只是指针，对账会误报
 ```
 
