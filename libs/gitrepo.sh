@@ -97,43 +97,42 @@ libgitrepo_clear_evidence() {
 # libgitrepo_is_real_repo: return 0 if the current directory holds a git
 # repository of its own WITH at least one commit.
 #
-# Distinguishes the four states ./.git can be in:
-#   1. a dangling symlink into the deleted .repo/projects tree -- the untouched
-#      vendor state, and the thing reclamation replaces;
-#   2. a real directory carrying history -- must be left alone;
+# No git command appears in this function on purpose. Every git command
+# begins by discovering a repository: if ./.git is absent or broken it
+# climbs to the parent directory and tries again, and whatever it then
+# answers describes the NEAREST ANCESTOR repository, not this directory.
+# The previous implementation ran rev-parse behind `[ -d .git ]`, but that
+# test does not anchor the git calls that follow it. In a vendor tree whose
+# projects nest (rk3588 nests ten projects inside bootable/recovery and
+# vendor/rockchip/hardware), a child whose own .git is a stripped skeleton
+# still hears "yes" from its parent's fresh repository, is skipped as
+# "already a repository", and has the parent's content pushed under its
+# name. The filesystem tests below cannot climb, so the mistake cannot
+# recur.
+#
+# They also match the actual vendor state, which the old guard mis-modelled.
+# It expected a stripped .git to BE a dangling symlink; the real thing is a
+# plain directory whose objects/ and refs/ are symlinks into the removed
+# .repo/ tree. `-d` is false for a dangling symlink, so:
+#
+#   1. skeleton: real .git dir, inner links dangling -- fails `-d .git/objects`;
+#   2. a real directory carrying history -- passes, left alone;
 #   3. a repository with no commits, left by a run interrupted between
-#      `git init` and the first commit -- has nothing to protect, must be
-#      rebuilt;
+#      `git init` and the first commit -- no branch ref exists yet, fails
+#      the last test, gets rebuilt;
 #   4. absent -- nothing to protect.
 #
 # Only state 2 returns 0.
-#
-# Each of the three tests rules out one state, and none is redundant:
-#
-# `-d .git` must come first. `git rev-parse` walks UP the tree, so in a
-# subproject whose parent is already a repository it answers happily about the
-# parent -- a guard built on it alone would skip a directory that has no
-# repository of its own, leaving that subproject un-reclaimed while reporting
-# success. `-d` pins the answer to this directory. It also rules out state 1,
-# since a dangling symlink is not a directory.
-#
-# `rev-parse --git-dir` rejects a directory that merely happens to be named
-# .git.
-#
-# `rev-parse HEAD` is what separates state 3 from state 2, and it is the whole
-# point of the guard: --git-dir succeeds on a freshly-initialised repository
-# with no commits, so without this the caller would treat a half-built
-# directory as carrying history and skip it -- committing nothing, then
-# recording it in the manifest as done.
-#
-# The intended use is as a re-run guard by any caller whose next act is
-# destructive. `git init` itself is safe to repeat -- libgitrepo_init reuses an
-# existing .git -- but `rm -rf .git` before it is not, and that is the sequence
-# this exists to gate.
 libgitrepo_is_real_repo() {
-    [ -d .git ] || return 1
-    git rev-parse --git-dir >/dev/null 2>&1 || return 1
-    git rev-parse HEAD >/dev/null 2>&1
+    [ -d .git ] || return 1          # state 4: no .git at all
+    [ -f .git/HEAD ] || return 1     # HEAD must be a real file
+    [ -d .git/objects ] || return 1  # state 1: dangling symlink fails -d
+    [ -d .git/refs ] || return 1     # state 1: same
+    # a commit implies a branch ref: loose under refs/heads (-A sees all
+    # entries), or packed into packed-refs after git gc
+    [ -n "$(ls -A .git/refs/heads 2>/dev/null)" ] && return 0
+    [ -f .git/packed-refs ] && return 0
+    return 1                         # state 3: init'd but never committed
 }
 
 # libgitrepo_init: create the repository if absent, and ignore our own bookkeeping.
